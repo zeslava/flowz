@@ -23,17 +23,12 @@ pub trait Executor: Send + Sync {
     ) -> Result<StepOutcome>;
 }
 
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ExecutorKind {
     Stub,
+    #[default]
     Dail,
-}
-
-impl Default for ExecutorKind {
-    fn default() -> Self {
-        ExecutorKind::Dail
-    }
 }
 
 impl ExecutorKind {
