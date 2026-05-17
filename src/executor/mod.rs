@@ -131,6 +131,8 @@ fn build_dail_command(
         .arg(jail_name)
         .arg("--mount")
         .arg(format!("{}:{workspace_mount}", ctx.workspace.display()))
+        .arg("--network")
+        .arg("inherit")
         .arg("--rm")
         .arg("--wait")
         .current_dir(ctx.workspace);
