@@ -1,0 +1,17 @@
+version: 1
+
+triggers:
+  - on: push
+    branches: [main]
+
+steps:
+  build:
+    run: ci/build.sh
+
+  test:
+    run: ci/test.sh
+    needs: [build]
+
+  lint:
+    run: ci/lint.sh
+    needs: [build]
