@@ -1,7 +1,8 @@
 use crate::model::{Repo, Run, RunStatus, StepRecord, StepStatus};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
+use sqlx::SqlitePool;
 use std::str::FromStr;
 
 #[derive(Clone)]
@@ -13,7 +14,9 @@ impl Store {
     pub async fn new(db_url: &str) -> Result<Self> {
         let opts = SqliteConnectOptions::from_str(db_url)
             .context("parse db url")?
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal);
         let pool = SqlitePool::connect_with(opts)
             .await
             .context("connect to sqlite")?;

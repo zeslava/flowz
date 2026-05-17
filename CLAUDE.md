@@ -84,10 +84,9 @@ Scripts are plain `sh` — no `.dail` extension needed for `StubExecutor`.
 ## What is NOT implemented yet
 
 - CLI commands (`flowz validate`, `flowz status`, `flowz logs`, etc.) — stub only.
-- SSE live log streaming in the browser — UI shows static logs only.
-- `DailExecutor` — requires FreeBSD 14+ and dail runtime.
 
 ## Platform note
 
-All v0.1 development uses `StubExecutor` (`sh <run_file>` in workspace directory).
-`DailExecutor` and rc.d/port packaging require a FreeBSD 14+ host.
+`StubExecutor` — `sh <run_file>` in workspace directory, used for Linux dev/CI.
+`DailExecutor` — jail-per-job via dail, runs on FreeBSD 14+. **Verified working** (run 02f9a715 — success).
+rc.d/port packaging not yet done.
