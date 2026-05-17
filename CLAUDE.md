@@ -69,6 +69,18 @@ Token flows from `flowz-server.yaml` → job payload → agent.
 - axum v0.8 route syntax: `{param}` not `:param`.
 - SQLite: `"commit"` column is quoted (reserved keyword). `create_if_missing(true)` in store.
 
+## StubExecutor behaviour
+
+- Runs `sh <run_file>` with `current_dir` set to the cloned workspace.
+- Captures **both stdout and stderr** — stderr is drained in a separate thread to avoid pipe deadlock, then emitted after stdout.
+- After each step, the agent appends a synthetic `✓ exit 0` / `✗ exit N` log line.
+- Infrastructure errors (clone failure, missing `.flowz.yaml`) are posted as an `agent` step log and the run is marked `failure`.
+
+## CI
+
+flowz builds itself. `.flowz.yaml` + `ci/` are committed. Steps: `build` → `test` + `lint` (parallel after build).
+Scripts are plain `sh` — no `.dail` extension needed for `StubExecutor`.
+
 ## What is NOT implemented yet
 
 - CLI commands (`flowz validate`, `flowz status`, `flowz logs`, etc.) — stub only.

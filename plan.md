@@ -89,6 +89,7 @@ Files: `src/model/mod.rs`, `src/pipeline/mod.rs`, `src/executor/mod.rs`
 ### Phase 2 — Executor adapters ✅ (partial)
 Files: `src/executor/mod.rs`
 - `StubExecutor`: runs `sh <run_file>` in workspace — Linux dev/testing. ✅
+  - Captures both stdout and stderr (stderr drained in a thread to avoid pipe deadlock). ✅
 - `DailExecutor`: deferred — requires FreeBSD 14+ and dail runtime.
 
 ### Phase 3 — `flowz-server` ✅
@@ -114,6 +115,8 @@ Files: `src/agent/mod.rs`, `src/bin/agent.rs`
   parse `.flowz.yaml` → run steps via `StubExecutor` →
   POST log chunks + per-step status → POST final run status → cleanup.
 - Honors `only.branch` (skipped steps → `StepStatus::Skipped`).
+- Infrastructure errors (clone, yaml parse) posted as `agent` step log + run marked `failure`. ✅
+- Synthetic `✓/✗ exit N` log line appended after each step. ✅
 
 ### Phase 5 — GitHub commit status ✅
 Files: `src/agent/mod.rs`
@@ -124,6 +127,9 @@ Files: `src/agent/mod.rs`
 Files: `templates/runs.html`, `templates/run.html`, `src/server/mod.rs`
 - `GET /` — run list (askama).
 - `GET /runs/{id}` — run detail with steps and logs (static, no SSE yet).
+- Failure banner at top of run page with link to the failed step's logs. ✅
+- Step names in table are anchor links to their log section. ✅
+- Failed step row and log block visually highlighted. ✅
 
 ---
 
@@ -146,7 +152,7 @@ Files: `src/server/mod.rs`, `templates/run.html`
 ### Phase 9 — Packaging & docs
 - `rc.d/flowz` service script; FreeBSD port skeleton.
 - `docs/` mdBook scaffold.
-- Dogfood `.flowz.yaml` + `ci/*.dail` for flowz's own CI.
+- Dogfood `.flowz.yaml` + `ci/*.sh` for flowz's own CI. ✅ (build, test, lint)
 
 ### Phase 10 — `DailExecutor` (FreeBSD only)
 - Spawns `dail run <file>`, streams stdout/stderr, captures exit code.
