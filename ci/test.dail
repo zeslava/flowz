@@ -1,5 +1,7 @@
 FROM 15.0-RELEASE
 
+PARAM ip4=inherit
+
 RUN pkg install -y rust
 
 CMD cd /workspace && cargo test --workspace
