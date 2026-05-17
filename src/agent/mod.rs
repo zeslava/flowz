@@ -117,18 +117,35 @@ async fn do_execute(
             env,
         };
 
-        // run_step is sync — run in blocking thread pool
+        // run_step is sync — run in blocking thread pool.
+        // Use a channel so the blocking thread can hand off log lines to a
+        // single async consumer that naturally batches bursty output and sends
+        // one HTTP request per burst instead of one per line.
         let outcome = {
             let run_file = step.run.clone();
             let workspace = workspace.to_path_buf();
             let env = ctx.env.clone();
             let step_name_owned = step_name.clone();
-            let client = client.clone();
-            let server_url = cfg.server_url.clone();
             let run_id = run.id.clone();
             let executor_kind = cfg.executor;
 
-            tokio::task::spawn_blocking(move || -> (anyhow::Result<crate::executor::StepOutcome>, Vec<String>) {
+            let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(256);
+
+            let client_consumer = client.clone();
+            let server_url_consumer = cfg.server_url.clone();
+            let run_id_consumer = run.id.clone();
+            let step_name_consumer = step_name.to_string();
+            let consumer = tokio::spawn(async move {
+                while let Some(line) = log_rx.recv().await {
+                    let mut batch = vec![line];
+                    while let Ok(line) = log_rx.try_recv() {
+                        batch.push(line);
+                    }
+                    post_logs(&client_consumer, &server_url_consumer, &run_id_consumer, &step_name_consumer, batch).await;
+                }
+            });
+
+            let blocking_result = tokio::task::spawn_blocking(move || {
                 let ctx = StepContext {
                     run_id: &run_id,
                     step_name: &step_name_owned,
@@ -137,29 +154,18 @@ async fn do_execute(
                     env,
                 };
                 let executor = executor_kind.build();
-                let outcome = executor.run_step(&ctx, &mut |line| {
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        let client2 = client.clone();
-                        let url = server_url.clone();
-                        let id = run_id.clone();
-                        let step = step_name_owned.clone();
-                        handle.spawn(async move {
-                            post_logs(&client2, &url, &id, &step, vec![line]).await;
-                        });
-                    }
-                });
-                (outcome, vec![])
+                executor.run_step(&ctx, &mut |line| {
+                    let _ = log_tx.blocking_send(line);
+                })
+                // log_tx dropped here, which closes the channel
             })
             .await
-            .context("spawn_blocking")?
+            .context("spawn_blocking")?;
+
+            consumer.await.context("log consumer")?;
+
+            blocking_result
         };
-
-        let (outcome, log_buffer) = outcome;
-
-        // flush remaining logs
-        if !log_buffer.is_empty() {
-            post_logs(client, &cfg.server_url, &run.id, step_name, log_buffer).await;
-        }
 
         let step_status = match &outcome {
             Ok(o) => {
