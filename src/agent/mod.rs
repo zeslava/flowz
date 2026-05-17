@@ -14,6 +14,7 @@ pub struct AgentConfig {
     pub agent_name: String,
     pub workspace_dir: PathBuf,
     pub executor: ExecutorKind,
+    pub dail_prefix: Option<String>,
 }
 
 pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
@@ -127,6 +128,7 @@ async fn do_execute(
             let server_url = cfg.server_url.clone();
             let run_id = run.id.clone();
             let executor_kind = cfg.executor;
+            let dail_prefix = cfg.dail_prefix.clone();
 
             tokio::task::spawn_blocking(move || -> (anyhow::Result<crate::executor::StepOutcome>, Vec<String>) {
                 let ctx = StepContext {
@@ -136,7 +138,7 @@ async fn do_execute(
                     workspace: &workspace,
                     env,
                 };
-                let executor = executor_kind.build();
+                let executor = executor_kind.build(dail_prefix);
                 let mut buffer: Vec<String> = Vec::new();
                 let outcome = executor.run_step(&ctx, &mut |line| {
                     buffer.push(line);

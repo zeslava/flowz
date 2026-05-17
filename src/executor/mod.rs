@@ -37,10 +37,13 @@ impl Default for ExecutorKind {
 }
 
 impl ExecutorKind {
-    pub fn build(self) -> Box<dyn Executor> {
+    pub fn build(self, dail_prefix: Option<String>) -> Box<dyn Executor> {
         match self {
             ExecutorKind::Stub => Box::new(StubExecutor),
-            ExecutorKind::Dail => Box::new(DailExecutor::default()),
+            ExecutorKind::Dail => Box::new(DailExecutor {
+                prefix: dail_prefix,
+                ..DailExecutor::default()
+            }),
         }
     }
 }
@@ -94,6 +97,8 @@ impl Executor for StubExecutor {
 pub struct DailExecutor {
     pub dail_bin: String,
     pub workspace_mount: String,
+    /// Optional prefix command, e.g. "doas" or "sudo"
+    pub prefix: Option<String>,
 }
 
 impl Default for DailExecutor {
@@ -101,6 +106,7 @@ impl Default for DailExecutor {
         DailExecutor {
             dail_bin: "dail".to_string(),
             workspace_mount: "/workspace".to_string(),
+            prefix: None,
         }
     }
 }
@@ -119,11 +125,19 @@ fn sanitize_jail_name(s: &str) -> String {
 
 fn build_dail_command(
     dail_bin: &str,
+    prefix: Option<&str>,
     jail_name: &str,
     workspace_mount: &str,
     ctx: &StepContext,
 ) -> std::process::Command {
-    let mut cmd = std::process::Command::new(dail_bin);
+    let (bin, prepend_dail) = match prefix {
+        Some(p) => (p, true),
+        None => (dail_bin, false),
+    };
+    let mut cmd = std::process::Command::new(bin);
+    if prepend_dail {
+        cmd.arg(dail_bin);
+    }
     cmd.arg("run")
         .arg(ctx.run_file)
         .arg("--name")
@@ -171,7 +185,7 @@ impl Executor for DailExecutor {
             jail_name: jail_name.clone(),
         };
 
-        let mut cmd = build_dail_command(&self.dail_bin, &jail_name, &self.workspace_mount, ctx);
+        let mut cmd = build_dail_command(&self.dail_bin, self.prefix.as_deref(), &jail_name, &self.workspace_mount, ctx);
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn()?;
@@ -217,7 +231,7 @@ mod tests {
             workspace: Path::new("/tmp/workspace"),
             env: vec![("FOO".to_string(), "bar".to_string())],
         };
-        let cmd = build_dail_command("dail", "flowz-abc12345-build", "/workspace", &ctx);
+        let cmd = build_dail_command("dail", None, "flowz-abc12345-build", "/workspace", &ctx);
         let args: Vec<_> = cmd.get_args().collect();
         assert!(args.contains(&std::ffi::OsStr::new("run")));
         assert!(args.contains(&std::ffi::OsStr::new("ci/build.dail")));
@@ -227,6 +241,22 @@ mod tests {
         assert!(args.contains(&std::ffi::OsStr::new("--rm")));
         assert!(args.contains(&std::ffi::OsStr::new("-e")));
         assert!(args.contains(&std::ffi::OsStr::new("FOO=bar")));
+    }
+
+    #[test]
+    fn build_dail_command_with_doas_prefix() {
+        let ctx = StepContext {
+            run_id: "abc12345-def",
+            step_name: "build",
+            run_file: "ci/build.dail",
+            workspace: Path::new("/tmp/workspace"),
+            env: vec![],
+        };
+        let cmd = build_dail_command("dail", Some("doas"), "flowz-abc12345-build", "/workspace", &ctx);
+        assert_eq!(cmd.get_program(), "doas");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args[0], "dail");
+        assert_eq!(args[1], "run");
     }
 
     #[test]

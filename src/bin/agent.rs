@@ -13,6 +13,8 @@ struct Config {
     workspace_dir: PathBuf,
     #[serde(default)]
     executor: ExecutorKind,
+    #[serde(default)]
+    dail_prefix: Option<String>,
 }
 
 fn default_agent_name() -> String {
@@ -53,6 +55,7 @@ async fn main() -> Result<()> {
             agent_name: default_agent_name(),
             workspace_dir: default_workspace(),
             executor: ExecutorKind::default(),
+            dail_prefix: None,
         }
     };
 
@@ -71,6 +74,7 @@ async fn main() -> Result<()> {
         agent_name: config.agent_name,
         workspace_dir: config.workspace_dir,
         executor: config.executor,
+        dail_prefix: config.dail_prefix,
     })
     .await
 }
