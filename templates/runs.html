@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>flowz</title>
+  <style>
+    body { font-family: monospace; max-width: 1100px; margin: 40px auto; padding: 0 20px; background: #fafafa; color: #111; }
+    h1 { margin-bottom: 24px; font-size: 1.4rem; }
+    table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+    th { text-align: left; padding: 10px 14px; background: #f3f4f6; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 10px 14px; border-bottom: 1px solid #f3f4f6; font-size: 0.9rem; }
+    tr:last-child td { border-bottom: none; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+    .s-success { color: #16a34a; font-weight: bold; }
+    .s-failure { color: #dc2626; font-weight: bold; }
+    .s-running { color: #d97706; font-weight: bold; }
+    .s-queued  { color: #6b7280; }
+    .s-cancelled { color: #9ca3af; }
+    .empty { padding: 40px; text-align: center; color: #9ca3af; }
+    .trigger { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px; }
+    .trigger h2 { margin: 0 0 12px; font-size: 0.95rem; color: #374151; }
+    .trigger form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+    .trigger label { display: flex; flex-direction: column; gap: 3px; font-size: 0.78rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; }
+    .trigger input { font-family: monospace; font-size: 0.85rem; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 4px; width: 260px; }
+    .trigger input.short { width: 120px; }
+    .trigger button { padding: 6px 16px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.85rem; cursor: pointer; }
+    .trigger button:hover { background: #1d4ed8; }
+    #trigger-msg { font-size: 0.82rem; margin-top: 8px; }
+    #trigger-msg.ok { color: #16a34a; }
+    #trigger-msg.err { color: #dc2626; }
+    .repo-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 0.88rem; border-bottom: 1px solid #f3f4f6; }
+    .repo-row:last-child { border-bottom: none; margin-bottom: 12px; }
+    .repo-name { flex: 1; font-weight: 600; }
+    .build-btn { padding: 3px 12px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.82rem; cursor: pointer; }
+    .build-btn:hover { background: #1d4ed8; }
+    .del-btn { padding: 3px 8px; background: none; border: 1px solid #e5e7eb; border-radius: 4px; color: #9ca3af; cursor: pointer; font-size: 0.78rem; }
+    .del-btn:hover { border-color: #dc2626; color: #dc2626; }
+    #repo-msg { font-size: 0.82rem; margin-top: 6px; }
+    #repo-msg.ok { color: #16a34a; }
+    #repo-msg.err { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>flowz / runs</h1>
+
+  <div class="trigger">
+    <h2>Repos</h2>
+    <div id="repos-list"></div>
+    <form id="add-repo-form">
+      <label>Clone URL
+        <input type="text" name="clone_url" placeholder="https://github.com/owner/repo.git" required>
+      </label>
+      <label>Branch
+        <input type="text" name="branch" class="short" placeholder="main">
+      </label>
+      <button type="submit">Add repo</button>
+    </form>
+    <div id="repo-msg"></div>
+  </div>
+  <script>
+    async function loadRepos() {
+      const resp = await fetch('/api/repos');
+      const repos = await resp.json();
+      const list = document.getElementById('repos-list');
+      if (!repos.length) {
+        list.innerHTML = '<div style="color:#9ca3af;font-size:0.85rem;margin-bottom:10px">No repos yet.</div>';
+        return;
+      }
+      list.innerHTML = repos.map(r => `
+        <div class="repo-row" data-id="${r.id}">
+          <span class="repo-name">${r.name}</span>
+          <code>${r.branch}</code>
+          <button class="build-btn" onclick="triggerRun('${r.id}','${r.clone_url}','${r.branch}')">Build</button>
+          <button class="del-btn" onclick="deleteRepo('${r.id}')">✕</button>
+        </div>`).join('');
+    }
+
+    async function triggerRun(id, clone_url, branch) {
+      const msg = document.getElementById('repo-msg');
+      const resp = await fetch('/api/runs', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ clone_url, branch })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        msg.className = 'ok';
+        msg.textContent = 'Queued: ' + data.run_id;
+        setTimeout(() => location.reload(), 800);
+      } else {
+        msg.className = 'err';
+        msg.textContent = 'Error: ' + await resp.text();
+      }
+    }
+
+    async function deleteRepo(id) {
+      await fetch('/api/repos/' + id, { method: 'DELETE' });
+      loadRepos();
+    }
+
+    document.getElementById('add-repo-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = { clone_url: fd.get('clone_url') };
+      const branch = fd.get('branch').trim();
+      if (branch) body.branch = branch;
+      const msg = document.getElementById('repo-msg');
+      const resp = await fetch('/api/repos', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (resp.ok) {
+        e.target.reset();
+        msg.className = '';
+        msg.textContent = '';
+        loadRepos();
+      } else {
+        msg.className = 'err';
+        msg.textContent = 'Error: ' + await resp.text();
+      }
+    });
+
+    loadRepos();
+  </script>
+  {% if runs.is_empty() %}
+  <div class="empty">No runs yet. Push to a configured repo to trigger a run.</div>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Repo</th>
+        <th>Branch</th>
+        <th>Commit</th>
+        <th>Status</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td><a href="/runs/{{ r.id }}">{{ r.id_short }}</a></td>
+        <td>{{ r.repo }}</td>
+        <td>{{ r.branch }}</td>
+        <td><code>{{ r.commit_short }}</code></td>
+        <td class="s-{{ r.status }}">{{ r.status }}</td>
+        <td>{{ r.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</body>
+</html>

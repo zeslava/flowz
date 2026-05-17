@@ -1,0 +1,18 @@
+version: 1
+
+triggers:
+  - on: push
+    branches: [main]
+
+env:
+  RUST_LOG: info
+
+steps:
+  build:
+    run: ci/build.dail
+    timeout: 10m
+
+  test:
+    run: ci/test.dail
+    needs: [build]
+    timeout: 5m

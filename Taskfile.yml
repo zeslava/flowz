@@ -1,0 +1,71 @@
+version: "3"
+
+vars:
+  SECRET: dev-secret
+
+tasks:
+  build:
+    desc: Build all binaries
+    cmds:
+      - cargo build --workspace
+
+  test:
+    desc: Run tests
+    cmds:
+      - cargo test --workspace
+
+  lint:
+    desc: Clippy + fmt check
+    cmds:
+      - cargo clippy --workspace -- -D warnings
+      - cargo fmt --all -- --check
+
+  fmt:
+    desc: Format code
+    cmds:
+      - cargo fmt --all
+
+  server:
+    desc: Start flowz-server (reads flowz-server.yaml)
+    cmds:
+      - cargo run --bin flowz-server
+
+  agent:
+    desc: Start flowz-agent (reads flowz-agent.yaml)
+    cmds:
+      - cargo run --bin flowz-agent
+
+  dev:
+    desc: Start server and agent in parallel
+    deps: [build]
+    cmds:
+      - cmd: ./target/debug/flowz-server &
+        silent: false
+      - cmd: sleep 1
+        silent: true
+      - ./target/debug/flowz-agent
+
+  webhook:
+    desc: Send a test signed push webhook to localhost:7878
+    vars:
+      REPO: '{{.REPO | default "owner/repo"}}'
+      BRANCH: '{{.BRANCH | default "main"}}'
+      SHA: '{{.SHA | default "abc1234567890abc1234567890abc1234567890ab"}}'
+      BODY: '{"ref":"refs/heads/{{.BRANCH}}","after":"{{.SHA}}","repository":{"full_name":"{{.REPO}}","clone_url":"https://github.com/{{.REPO}}.git"}}'
+    cmds:
+      - |
+        SIG="sha256=$(echo -n '{{.BODY}}' | openssl dgst -sha256 -hmac '{{.SECRET}}' | awk '{print $2}')"
+        curl -s -X POST http://localhost:7878/webhook/github \
+          -H "Content-Type: application/json" \
+          -H "X-Hub-Signature-256: $SIG" \
+          -d '{{.BODY}}' | jq .
+
+  runs:
+    desc: List runs via API
+    cmds:
+      - curl -s http://localhost:7878/api/runs | jq .
+
+  logs:
+    desc: Get logs for a run (task logs RUN=<id>)
+    cmds:
+      - curl -s http://localhost:7878/api/runs/{{.RUN}}/logs | jq .
