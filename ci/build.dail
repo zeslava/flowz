@@ -1,0 +1,5 @@
+FROM 15.0-RELEASE
+
+RUN pkg install -y rust
+
+CMD cd /workspace && cargo build --workspace

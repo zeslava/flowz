@@ -125,8 +125,9 @@ fn build_dail_command(
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new(dail_bin);
     cmd.arg("run")
-        .arg(jail_name)
         .arg(ctx.run_file)
+        .arg("--name")
+        .arg(jail_name)
         .arg("--mount")
         .arg(format!("{}:{workspace_mount}", ctx.workspace.display()))
         .arg("--rm")
@@ -219,6 +220,8 @@ mod tests {
         let cmd = build_dail_command("dail", "flowz-abc12345-build", "/workspace", &ctx);
         let args: Vec<_> = cmd.get_args().collect();
         assert!(args.contains(&std::ffi::OsStr::new("run")));
+        assert!(args.contains(&std::ffi::OsStr::new("ci/build.dail")));
+        assert!(args.contains(&std::ffi::OsStr::new("--name")));
         assert!(args.contains(&std::ffi::OsStr::new("flowz-abc12345-build")));
         assert!(args.contains(&std::ffi::OsStr::new("--wait")));
         assert!(args.contains(&std::ffi::OsStr::new("--rm")));

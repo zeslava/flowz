@@ -6,12 +6,12 @@ triggers:
 
 steps:
   build:
-    run: ci/build.sh
+    run: ci/build.dail
 
   test:
-    run: ci/test.sh
+    run: ci/test.dail
     needs: [build]
 
   lint:
-    run: ci/lint.sh
+    run: ci/lint.dail
     needs: [build]
