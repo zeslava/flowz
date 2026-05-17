@@ -9,13 +9,16 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse,
+    },
     routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{convert::Infallible, time::Duration};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -38,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/runs/{id}/logs", get(get_logs))
+        .route("/api/runs/{id}/logs/stream", get(stream_logs))
         .with_state(state)
 }
 
@@ -523,6 +527,48 @@ async fn get_logs(
             (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
         }
     }
+}
+
+// ── GET /api/runs/:id/logs/stream ────────────────────────────────────────────
+
+async fn stream_logs(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Event, Infallible>>();
+
+    tokio::spawn(async move {
+        let mut last_id = 0i64;
+        loop {
+            let rows = state
+                .store
+                .get_logs_from(&run_id, last_id)
+                .await
+                .unwrap_or_default();
+            for (id, step, line) in &rows {
+                last_id = last_id.max(*id);
+                let _ = tx.send(Ok(Event::default()
+                    .event("log")
+                    .data(format!("{}\t{}", step, line))));
+            }
+            let run_done = state
+                .store
+                .get_run(&run_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| !matches!(r.status, RunStatus::Queued | RunStatus::Running))
+                .unwrap_or(true);
+            if run_done {
+                let _ = tx.send(Ok(Event::default().event("done").data("")));
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 pub async fn run(listen: &str, state: AppState) -> Result<()> {

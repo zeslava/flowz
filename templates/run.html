@@ -69,8 +69,9 @@
   </table>
 
   <h2>Logs</h2>
+  <div id="logs-container">
   {% if log_groups.is_empty() %}
-  <p class="empty-logs">No logs recorded.</p>
+  <p class="empty-logs" id="no-logs-msg">No logs recorded.</p>
   {% else %}
   {% for group in log_groups %}
   <div id="log-{{ group.step }}" class="log-block{% if group.status == "failure" %} log-failure{% endif %}">
@@ -80,5 +81,49 @@
   </div>
   {% endfor %}
   {% endif %}
+  </div>
+
+{% if run.status == "running" || run.status == "queued" %}
+<script>
+(function() {
+  var runId = "{{ run.id }}";
+  var es = new EventSource('/api/runs/' + runId + '/logs/stream');
+  var blocks = {};
+
+  function getOrCreateBlock(step) {
+    if (blocks[step]) return blocks[step];
+    var noLogs = document.getElementById('no-logs-msg');
+    if (noLogs) noLogs.remove();
+    var container = document.getElementById('logs-container');
+    var div = document.getElementById('log-' + step);
+    if (!div) {
+      div = document.createElement('div');
+      div.id = 'log-' + step;
+      div.className = 'log-block';
+      div.innerHTML = '<div class="step-label">' + step + '</div><pre></pre>';
+      container.appendChild(div);
+    }
+    blocks[step] = div.querySelector('pre');
+    return blocks[step];
+  }
+
+  es.addEventListener('log', function(e) {
+    var idx = e.data.indexOf('\t');
+    var step = e.data.slice(0, idx);
+    var line = e.data.slice(idx + 1);
+    var pre = getOrCreateBlock(step);
+    pre.textContent += line + '\n';
+    pre.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  });
+
+  es.addEventListener('done', function() {
+    es.close();
+    window.location.reload();
+  });
+
+  es.onerror = function() { es.close(); };
+})();
+</script>
+{% endif %}
 </body>
 </html>

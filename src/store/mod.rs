@@ -175,6 +175,18 @@ impl Store {
         Ok(rows)
     }
 
+    pub async fn get_logs_from(&self, run_id: &str, after_id: i64) -> Result<Vec<(i64, String, String)>> {
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, step, line FROM log_lines WHERE run_id = ? AND id > ? ORDER BY id",
+        )
+        .bind(run_id)
+        .bind(after_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("get logs from")?;
+        Ok(rows)
+    }
+
     pub async fn create_repo(&self, repo: &Repo) -> Result<()> {
         sqlx::query(
             "INSERT INTO repos (id, name, clone_url, branch) VALUES (?, ?, ?, ?)",
