@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use flowz::agent::{run_loop, AgentConfig};
+use flowz::executor::ExecutorKind;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -10,6 +11,8 @@ struct Config {
     agent_name: String,
     #[serde(default = "default_workspace")]
     workspace_dir: PathBuf,
+    #[serde(default)]
+    executor: ExecutorKind,
 }
 
 fn default_agent_name() -> String {
@@ -49,6 +52,7 @@ async fn main() -> Result<()> {
             server_url,
             agent_name: default_agent_name(),
             workspace_dir: default_workspace(),
+            executor: ExecutorKind::default(),
         }
     };
 
@@ -66,6 +70,7 @@ async fn main() -> Result<()> {
         server_url: config.server_url,
         agent_name: config.agent_name,
         workspace_dir: config.workspace_dir,
+        executor: config.executor,
     })
     .await
 }

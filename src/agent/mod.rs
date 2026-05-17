@@ -1,5 +1,5 @@
 use crate::{
-    executor::{Executor, StepContext, StubExecutor},
+    executor::{ExecutorKind, StepContext},
     model::{Run, RunStatus, StepStatus},
     pipeline,
 };
@@ -13,6 +13,7 @@ pub struct AgentConfig {
     pub server_url: String,
     pub agent_name: String,
     pub workspace_dir: PathBuf,
+    pub executor: ExecutorKind,
 }
 
 pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
@@ -109,6 +110,7 @@ async fn do_execute(
             .collect();
 
         let ctx = StepContext {
+            run_id: &run.id,
             step_name,
             run_file: &step.run,
             workspace,
@@ -124,15 +126,17 @@ async fn do_execute(
             let client = client.clone();
             let server_url = cfg.server_url.clone();
             let run_id = run.id.clone();
+            let executor_kind = cfg.executor;
 
             tokio::task::spawn_blocking(move || -> (anyhow::Result<crate::executor::StepOutcome>, Vec<String>) {
                 let ctx = StepContext {
+                    run_id: &run_id,
                     step_name: &step_name_owned,
                     run_file: &run_file,
                     workspace: &workspace,
                     env,
                 };
-                let executor = StubExecutor;
+                let executor = executor_kind.build();
                 let mut buffer: Vec<String> = Vec::new();
                 let outcome = executor.run_step(&ctx, &mut |line| {
                     buffer.push(line);
