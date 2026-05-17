@@ -307,14 +307,16 @@ async fn post_commit_status(client: &Client, token: &str, repo: &str, sha: &str,
 // git sets .git/objects dirs to 0555; make everything writable before removal.
 fn remove_dir_all_force(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    // ensure this dir is readable+writable+executable before touching its contents
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o700);
+        let _ = std::fs::set_permissions(path, perms);
+    }
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
-        let ft = entry.file_type()?;
         let p = entry.path();
-        if ft.is_dir() {
-            let mut perms = std::fs::metadata(&p)?.permissions();
-            perms.set_mode(perms.mode() | 0o700);
-            let _ = std::fs::set_permissions(&p, perms);
+        if entry.file_type()?.is_dir() {
             remove_dir_all_force(&p)?;
             std::fs::remove_dir(&p)?;
         } else {
