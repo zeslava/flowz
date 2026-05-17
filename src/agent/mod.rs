@@ -137,24 +137,18 @@ async fn do_execute(
                     env,
                 };
                 let executor = executor_kind.build();
-                let mut buffer: Vec<String> = Vec::new();
                 let outcome = executor.run_step(&ctx, &mut |line| {
-                    buffer.push(line);
-                    if buffer.len() >= 64 {
-                        let rt = tokio::runtime::Handle::try_current();
-                        if let Ok(handle) = rt {
-                            let client2 = client.clone();
-                            let url = server_url.clone();
-                            let id = run_id.clone();
-                            let step = step_name_owned.clone();
-                            let lines = std::mem::take(&mut buffer);
-                            handle.spawn(async move {
-                                post_logs(&client2, &url, &id, &step, lines).await;
-                            });
-                        }
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        let client2 = client.clone();
+                        let url = server_url.clone();
+                        let id = run_id.clone();
+                        let step = step_name_owned.clone();
+                        handle.spawn(async move {
+                            post_logs(&client2, &url, &id, &step, vec![line]).await;
+                        });
                     }
                 });
-                (outcome, buffer)
+                (outcome, vec![])
             })
             .await
             .context("spawn_blocking")?
