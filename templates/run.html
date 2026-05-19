@@ -71,6 +71,26 @@
     </tbody>
   </table>
 
+  <h2>Artifacts</h2>
+  {% if artifacts.is_empty() %}
+  <p class="empty-logs">No artifacts.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>Step</th><th>Path</th><th>Size</th></tr>
+    </thead>
+    <tbody>
+      {% for a in artifacts %}
+      <tr>
+        <td>{{ a.step }}</td>
+        <td><a href="{{ a.href }}">{{ a.path }}</a></td>
+        <td>{{ a.size_human }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   <h2>Logs</h2>
   <div id="logs-container">
   {% if log_groups.is_empty() %}

@@ -28,6 +28,8 @@ pub struct Step {
     #[serde(default)]
     pub env: IndexMap<String, String>,
     pub timeout: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +75,15 @@ pub struct Repo {
     pub name: String,
     pub clone_url: String,
     pub branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub run_id: String,
+    pub step: String,
+    pub path: String,
+    pub size: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

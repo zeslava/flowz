@@ -12,6 +12,8 @@ pub enum PipelineError {
     CycleDetected(String),
     #[error("step '{step}': invalid run path '{path}'")]
     InvalidRunPath { step: String, path: String },
+    #[error("step '{step}': invalid artifact path '{path}'")]
+    InvalidArtifactPath { step: String, path: String },
     #[error("yaml parse error: {0}")]
     Parse(#[from] serde_yaml_ng::Error),
 }
@@ -36,6 +38,16 @@ pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
                 step: name.clone(),
                 path: step.run.clone(),
             });
+        }
+
+        // artifact paths must be relative, no absolute or parent traversal
+        for path in &step.artifacts {
+            if path.starts_with('/') || path.contains("../") {
+                return Err(PipelineError::InvalidArtifactPath {
+                    step: name.clone(),
+                    path: path.clone(),
+                });
+            }
         }
 
         for dep in &step.needs {
@@ -115,7 +127,10 @@ steps:
     #[test]
     fn rejects_bad_version() {
         let yaml = VALID.replace("version: 1", "version: 2");
-        assert!(matches!(parse(&yaml), Err(PipelineError::UnsupportedVersion(2))));
+        assert!(matches!(
+            parse(&yaml),
+            Err(PipelineError::UnsupportedVersion(2))
+        ));
     }
 
     #[test]
@@ -127,7 +142,10 @@ steps:
     run: ci/test.dail
     needs: [ghost]
 "#;
-        assert!(matches!(parse(yaml), Err(PipelineError::UnknownDependency(_, _))));
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::UnknownDependency(_, _))
+        ));
     }
 
     #[test]
@@ -146,6 +164,34 @@ steps:
     }
 
     #[test]
+    fn parses_artifacts() {
+        let yaml = r#"
+version: 1
+steps:
+  build:
+    run: ci/build.dail
+    artifacts: [target/debug/flowz, dist/]
+"#;
+        let pf = parse(yaml).unwrap();
+        assert_eq!(pf.steps["build"].artifacts.len(), 2);
+    }
+
+    #[test]
+    fn rejects_bad_artifact_path() {
+        let yaml = r#"
+version: 1
+steps:
+  build:
+    run: ci/build.dail
+    artifacts: [../etc/passwd]
+"#;
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::InvalidArtifactPath { .. })
+        ));
+    }
+
+    #[test]
     fn rejects_absolute_run_path() {
         let yaml = r#"
 version: 1
@@ -153,6 +199,9 @@ steps:
   bad:
     run: /etc/passwd
 "#;
-        assert!(matches!(parse(yaml), Err(PipelineError::InvalidRunPath { .. })));
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::InvalidRunPath { .. })
+        ));
     }
 }

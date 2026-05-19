@@ -53,14 +53,26 @@ async fn poll_job(client: &Client, server_url: &str) -> Result<Option<(Run, Opti
     Ok(Some((run, github_token)))
 }
 
-async fn execute_run(client: &Client, cfg: &AgentConfig, run: &Run, github_token: Option<&str>) -> Result<()> {
+async fn execute_run(
+    client: &Client,
+    cfg: &AgentConfig,
+    run: &Run,
+    github_token: Option<&str>,
+) -> Result<()> {
     let workspace = cfg.workspace_dir.join(&run.id);
     std::fs::create_dir_all(&workspace).context("create workspace")?;
 
     let result = do_execute(client, cfg, run, &workspace, github_token).await;
 
     if let Err(ref e) = result {
-        post_logs(client, &cfg.server_url, &run.id, "agent", vec![format!("error: {e:#}")]).await;
+        post_logs(
+            client,
+            &cfg.server_url,
+            &run.id,
+            "agent",
+            vec![format!("error: {e:#}")],
+        )
+        .await;
         post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
     }
 
@@ -94,13 +106,27 @@ async fn do_execute(
         if let Some(only) = &step.only {
             if let Some(branch_filter) = &only.branch {
                 if branch_filter != &run.branch {
-                    post_step_status(client, &cfg.server_url, &run.id, step_name, StepStatus::Skipped).await;
+                    post_step_status(
+                        client,
+                        &cfg.server_url,
+                        &run.id,
+                        step_name,
+                        StepStatus::Skipped,
+                    )
+                    .await;
                     continue;
                 }
             }
         }
 
-        post_step_status(client, &cfg.server_url, &run.id, step_name, StepStatus::Running).await;
+        post_step_status(
+            client,
+            &cfg.server_url,
+            &run.id,
+            step_name,
+            StepStatus::Running,
+        )
+        .await;
 
         let env: Vec<(String, String)> = pipeline
             .env
@@ -141,7 +167,14 @@ async fn do_execute(
                     while let Ok(line) = log_rx.try_recv() {
                         batch.push(line);
                     }
-                    post_logs(&client_consumer, &server_url_consumer, &run_id_consumer, &step_name_consumer, batch).await;
+                    post_logs(
+                        &client_consumer,
+                        &server_url_consumer,
+                        &run_id_consumer,
+                        &step_name_consumer,
+                        batch,
+                    )
+                    .await;
                 }
             });
 
@@ -170,9 +203,26 @@ async fn do_execute(
         let step_status = match &outcome {
             Ok(o) => {
                 let marker = if o.success { "✓" } else { "✗" };
-                post_logs(client, &cfg.server_url, &run.id, step_name,
-                    vec![format!("{marker} exit {}", o.exit_code)]).await;
+                post_logs(
+                    client,
+                    &cfg.server_url,
+                    &run.id,
+                    step_name,
+                    vec![format!("{marker} exit {}", o.exit_code)],
+                )
+                .await;
                 if o.success {
+                    if !step.artifacts.is_empty() {
+                        upload_artifacts(
+                            client,
+                            &cfg.server_url,
+                            &run.id,
+                            step_name,
+                            &step.artifacts,
+                            workspace,
+                        )
+                        .await;
+                    }
                     StepStatus::Success
                 } else {
                     overall_success = false;
@@ -180,8 +230,14 @@ async fn do_execute(
                 }
             }
             Err(e) => {
-                post_logs(client, &cfg.server_url, &run.id, step_name,
-                    vec![format!("✗ executor error: {e:#}")]).await;
+                post_logs(
+                    client,
+                    &cfg.server_url,
+                    &run.id,
+                    step_name,
+                    vec![format!("✗ executor error: {e:#}")],
+                )
+                .await;
                 overall_success = false;
                 StepStatus::Failure
             }
@@ -223,7 +279,13 @@ fn git_clone(clone_url: &str, workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn post_logs(client: &Client, server_url: &str, run_id: &str, step: &str, lines: Vec<String>) {
+async fn post_logs(
+    client: &Client,
+    server_url: &str,
+    run_id: &str,
+    step: &str,
+    lines: Vec<String>,
+) {
     let url = format!("{server_url}/api/runs/{run_id}/steps/{step}/logs");
     if let Err(e) = client
         .post(&url)
@@ -235,7 +297,94 @@ async fn post_logs(client: &Client, server_url: &str, run_id: &str, step: &str, 
     }
 }
 
-async fn post_step_status(client: &Client, server_url: &str, run_id: &str, step: &str, status: StepStatus) {
+async fn upload_artifacts(
+    client: &Client,
+    server_url: &str,
+    run_id: &str,
+    step: &str,
+    paths: &[String],
+    workspace: &Path,
+) {
+    for spec in paths {
+        let abs = workspace.join(spec);
+        if !abs.exists() {
+            post_logs(
+                client,
+                server_url,
+                run_id,
+                step,
+                vec![format!("⚠ artifact not found: {spec}")],
+            )
+            .await;
+            continue;
+        }
+
+        let mut files: Vec<PathBuf> = Vec::new();
+        if abs.is_dir() {
+            collect_files(&abs, &mut files);
+        } else {
+            files.push(abs);
+        }
+
+        for file in files {
+            let rel = match file.strip_prefix(workspace) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            let bytes = match std::fs::read(&file) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("read artifact {}: {e}", file.display());
+                    continue;
+                }
+            };
+            let size = bytes.len();
+            let url = format!("{server_url}/api/runs/{run_id}/steps/{step}/artifacts/{rel}");
+            match client.post(&url).body(bytes).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    post_logs(
+                        client,
+                        server_url,
+                        run_id,
+                        step,
+                        vec![format!("↑ artifact {rel} ({size} bytes)")],
+                    )
+                    .await;
+                }
+                Ok(resp) => {
+                    tracing::warn!("upload artifact {rel}: status {}", resp.status());
+                }
+                Err(e) => tracing::warn!("upload artifact {rel}: {e}"),
+            }
+        }
+    }
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("read artifact dir {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_files(&p, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+async fn post_step_status(
+    client: &Client,
+    server_url: &str,
+    run_id: &str,
+    step: &str,
+    status: StepStatus,
+) {
     let status_str = match status {
         StepStatus::Pending => "pending",
         StepStatus::Running => "running",

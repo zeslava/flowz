@@ -1,4 +1,4 @@
-use crate::model::{Repo, Run, RunStatus, StepRecord, StepStatus};
+use crate::model::{Artifact, Repo, Run, RunStatus, StepRecord, StepStatus};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
@@ -47,15 +47,13 @@ impl Store {
     }
 
     pub async fn create_step(&self, step: &StepRecord) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO steps (run_id, name, status) VALUES (?, ?, ?)",
-        )
-        .bind(&step.run_id)
-        .bind(&step.name)
-        .bind(step.status.as_str())
-        .execute(&self.pool)
-        .await
-        .context("insert step")?;
+        sqlx::query("INSERT INTO steps (run_id, name, status) VALUES (?, ?, ?)")
+            .bind(&step.run_id)
+            .bind(&step.name)
+            .bind(step.status.as_str())
+            .execute(&self.pool)
+            .await
+            .context("insert step")?;
         Ok(())
     }
 
@@ -154,16 +152,14 @@ impl Store {
     }
 
     pub async fn append_log(&self, run_id: &str, step: &str, line: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO log_lines (run_id, step, line, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(run_id)
-        .bind(step)
-        .bind(line)
-        .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .context("append log")?;
+        sqlx::query("INSERT INTO log_lines (run_id, step, line, created_at) VALUES (?, ?, ?, ?)")
+            .bind(run_id)
+            .bind(step)
+            .bind(line)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .context("append log")?;
         Ok(())
     }
 
@@ -178,7 +174,11 @@ impl Store {
         Ok(rows)
     }
 
-    pub async fn get_logs_from(&self, run_id: &str, after_id: i64) -> Result<Vec<(i64, String, String)>> {
+    pub async fn get_logs_from(
+        &self,
+        run_id: &str,
+        after_id: i64,
+    ) -> Result<Vec<(i64, String, String)>> {
         let rows = sqlx::query_as::<_, (i64, String, String)>(
             "SELECT id, step, line FROM log_lines WHERE run_id = ? AND id > ? ORDER BY id",
         )
@@ -191,16 +191,14 @@ impl Store {
     }
 
     pub async fn create_repo(&self, repo: &Repo) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO repos (id, name, clone_url, branch) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&repo.id)
-        .bind(&repo.name)
-        .bind(&repo.clone_url)
-        .bind(&repo.branch)
-        .execute(&self.pool)
-        .await
-        .context("insert repo")?;
+        sqlx::query("INSERT INTO repos (id, name, clone_url, branch) VALUES (?, ?, ?, ?)")
+            .bind(&repo.id)
+            .bind(&repo.name)
+            .bind(&repo.clone_url)
+            .bind(&repo.branch)
+            .execute(&self.pool)
+            .await
+            .context("insert repo")?;
         Ok(())
     }
 
@@ -213,7 +211,12 @@ impl Store {
         .context("list repos")?;
         Ok(rows
             .into_iter()
-            .map(|(id, name, clone_url, branch)| Repo { id, name, clone_url, branch })
+            .map(|(id, name, clone_url, branch)| Repo {
+                id,
+                name,
+                clone_url,
+                branch,
+            })
             .collect())
     }
 
@@ -224,6 +227,85 @@ impl Store {
             .await
             .context("delete repo")?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn insert_artifact(
+        &self,
+        run_id: &str,
+        step: &str,
+        path: &str,
+        size: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO artifacts (id, run_id, step, path, size, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (run_id, step, path) DO UPDATE SET
+                 size = excluded.size, created_at = excluded.created_at",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(run_id)
+        .bind(step)
+        .bind(path)
+        .bind(size)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .context("insert artifact")?;
+        Ok(())
+    }
+
+    pub async fn list_artifacts(&self, run_id: &str) -> Result<Vec<Artifact>> {
+        let rows = sqlx::query_as::<_, (String, String, String, i64, String)>(
+            "SELECT run_id, step, path, size, created_at
+             FROM artifacts WHERE run_id = ? ORDER BY step, path",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("list artifacts")?;
+        Ok(rows
+            .into_iter()
+            .map(|(run_id, step, path, size, created_at)| Artifact {
+                run_id,
+                step,
+                path,
+                size,
+                created_at: created_at.parse().unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    /// Returns run_ids whose artifacts should be evicted: beyond the 10 most
+    /// recent runs with artifacts, or older than 30 days.
+    pub async fn evict_old_artifact_runs(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT run_id, MAX(created_at) AS last
+             FROM artifacts GROUP BY run_id ORDER BY last DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("evict artifacts query")?;
+        let cutoff = Utc::now() - chrono::Duration::days(30);
+        let mut evict = Vec::new();
+        for (i, (run_id, last)) in rows.iter().enumerate() {
+            let too_old = last
+                .parse::<chrono::DateTime<Utc>>()
+                .map(|t| t < cutoff)
+                .unwrap_or(false);
+            if i >= 10 || too_old {
+                evict.push(run_id.clone());
+            }
+        }
+        Ok(evict)
+    }
+
+    pub async fn delete_artifacts(&self, run_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM artifacts WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&self.pool)
+            .await
+            .context("delete artifacts")?;
+        Ok(())
     }
 
     /// Returns the next queued run (job claim for agent).

@@ -31,8 +31,8 @@ pub fn verify_signature(secret: &str, body: &[u8], sig_header: &str) -> Result<(
 
     let expected = hex::decode(hex_sig).map_err(|_| WebhookError::InvalidSignatureFormat)?;
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(body);
     mac.verify_slice(&expected)
         .map_err(|_| WebhookError::SignatureMismatch)
@@ -62,5 +62,10 @@ pub fn parse_push(body: &[u8]) -> Result<PushEvent, WebhookError> {
         .ok_or(WebhookError::NotPushEvent)?
         .to_string();
 
-    Ok(PushEvent { repo, branch, commit, clone_url })
+    Ok(PushEvent {
+        repo,
+        branch,
+        commit,
+        clone_url,
+    })
 }

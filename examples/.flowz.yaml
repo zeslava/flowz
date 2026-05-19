@@ -11,6 +11,8 @@ steps:
   build:
     run: ci/build.dail
     timeout: 10m
+    artifacts:
+      - target/debug/flowz
 
   test:
     run: ci/test.dail

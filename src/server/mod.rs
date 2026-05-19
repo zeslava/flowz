@@ -8,7 +8,7 @@ use askama::Template;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse,
@@ -18,7 +18,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, path::PathBuf, time::Duration};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -26,6 +26,7 @@ pub struct AppState {
     pub store: Store,
     pub webhook_secret: String,
     pub github_token: Option<String>,
+    pub artifacts_dir: PathBuf,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -35,6 +36,12 @@ pub fn router(state: AppState) -> Router {
         .route("/webhook/github", post(github_webhook))
         .route("/api/jobs/poll", get(poll_job))
         .route("/api/runs/{id}/steps/{step}/logs", post(ingest_logs))
+        .route(
+            "/api/runs/{id}/steps/{step}/artifacts/{*path}",
+            post(upload_artifact),
+        )
+        .route("/api/runs/{id}/artifacts", get(list_artifacts_api))
+        .route("/api/runs/{id}/artifacts/{*path}", get(download_artifact))
         .route("/api/runs/{id}/status", post(update_run_status))
         .route("/api/repos", get(list_repos_api).post(create_repo_api))
         .route("/api/repos/{id}", axum::routing::delete(delete_repo_api))
@@ -83,8 +90,14 @@ impl From<&StepRecord> for StepRow {
         StepRow {
             name: s.name.clone(),
             status: step_status_str(&s.status).to_string(),
-            started_at: s.started_at.map(|t| t.format("%H:%M:%S").to_string()).unwrap_or_default(),
-            finished_at: s.finished_at.map(|t| t.format("%H:%M:%S").to_string()).unwrap_or_default(),
+            started_at: s
+                .started_at
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_default(),
+            finished_at: s
+                .finished_at
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_default(),
         }
     }
 }
@@ -93,6 +106,28 @@ struct LogGroup {
     step: String,
     status: String,
     lines: Vec<String>,
+}
+
+struct ArtifactRow {
+    step: String,
+    path: String,
+    size_human: String,
+    href: String,
+}
+
+fn human_size(bytes: i64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
 }
 
 fn run_status_str(s: &RunStatus) -> &'static str {
@@ -129,6 +164,7 @@ struct RunTemplate {
     run: RunRow,
     steps: Vec<StepRow>,
     log_groups: Vec<LogGroup>,
+    artifacts: Vec<ArtifactRow>,
 }
 
 fn render<T: Template>(tmpl: T) -> axum::response::Response {
@@ -148,12 +184,17 @@ async fn ui_runs(State(state): State<AppState>) -> axum::response::Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
     };
-    render(RunsTemplate { runs: runs.iter().map(RunRow::from).collect() })
+    render(RunsTemplate {
+        runs: runs.iter().map(RunRow::from).collect(),
+    })
 }
 
 // ── GET /runs/:id ─────────────────────────────────────────────────────────────
 
-async fn ui_run(State(state): State<AppState>, Path(run_id): Path<String>) -> axum::response::Response {
+async fn ui_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> axum::response::Response {
     let run = match state.store.get_run(&run_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
@@ -188,14 +229,35 @@ async fn ui_run(State(state): State<AppState>, Path(run_id): Path<String>) -> ax
             g.lines.push(line);
         } else {
             let status = step_status_map.get(&step).cloned().unwrap_or_default();
-            log_groups.push(LogGroup { step, status, lines: vec![line] });
+            log_groups.push(LogGroup {
+                step,
+                status,
+                lines: vec![line],
+            });
         }
     }
+
+    let artifacts: Vec<ArtifactRow> = match state.store.list_artifacts(&run_id).await {
+        Ok(list) => list
+            .into_iter()
+            .map(|a| ArtifactRow {
+                href: format!("/api/runs/{}/artifacts/{}/{}", run_id, a.step, a.path),
+                size_human: human_size(a.size),
+                step: a.step,
+                path: a.path,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::error!("ui list artifacts: {e}");
+            Vec::new()
+        }
+    };
 
     render(RunTemplate {
         run: RunRow::from(&run),
         steps: steps.iter().map(StepRow::from).collect(),
         log_groups,
+        artifacts,
     })
 }
 
@@ -244,7 +306,11 @@ async fn github_webhook(
     }
 
     tracing::info!(run_id = %run.id, repo = %run.repo, branch = %run.branch, "queued run");
-    (StatusCode::CREATED, Json(serde_json::json!({ "run_id": run.id }))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "run_id": run.id })),
+    )
+        .into_response()
 }
 
 // ── GET /api/jobs/poll ────────────────────────────────────────────────────────
@@ -259,10 +325,7 @@ fn default_timeout() -> u64 {
     25
 }
 
-async fn poll_job(
-    State(state): State<AppState>,
-    Query(q): Query<PollQuery>,
-) -> impl IntoResponse {
+async fn poll_job(State(state): State<AppState>, Query(q): Query<PollQuery>) -> impl IntoResponse {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(q.timeout_secs);
     loop {
         match state.store.claim_next_job().await {
@@ -270,7 +333,8 @@ async fn poll_job(
                 return Json(serde_json::json!({
                     "job": run,
                     "github_token": state.github_token,
-                })).into_response();
+                }))
+                .into_response();
             }
             Ok(None) => {
                 if tokio::time::Instant::now() >= deadline {
@@ -305,6 +369,83 @@ async fn ingest_logs(
         }
     }
     StatusCode::NO_CONTENT
+}
+
+// ── Artifacts ─────────────────────────────────────────────────────────────────
+
+/// Rejects absolute paths and parent traversal in a relative path.
+fn safe_rel_path(path: &str) -> bool {
+    !path.starts_with('/') && !path.split('/').any(|c| c == "..")
+}
+
+async fn upload_artifact(
+    State(state): State<AppState>,
+    Path((run_id, step, path)): Path<(String, String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !safe_rel_path(&path) {
+        return (StatusCode::BAD_REQUEST, "invalid artifact path").into_response();
+    }
+    let dest = state.artifacts_dir.join(&run_id).join(&step).join(&path);
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            tracing::error!("create artifact dir: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "io error").into_response();
+        }
+    }
+    if let Err(e) = tokio::fs::write(&dest, &body).await {
+        tracing::error!("write artifact: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "io error").into_response();
+    }
+    if let Err(e) = state
+        .store
+        .insert_artifact(&run_id, &step, &path, body.len() as i64)
+        .await
+    {
+        tracing::error!("insert artifact: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn list_artifacts_api(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    match state.store.list_artifacts(&run_id).await {
+        Ok(artifacts) => Json(artifacts).into_response(),
+        Err(e) => {
+            tracing::error!("list artifacts: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
+        }
+    }
+}
+
+async fn download_artifact(
+    State(state): State<AppState>,
+    Path((run_id, path)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !safe_rel_path(&path) {
+        return (StatusCode::BAD_REQUEST, "invalid artifact path").into_response();
+    }
+    // path is "<step>/<rel>"; stored under artifacts_dir/<run_id>/<step>/<rel>
+    let dest = state.artifacts_dir.join(&run_id).join(&path);
+    let bytes = match tokio::fs::read(&dest).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    };
+    let filename = path.rsplit('/').next().unwrap_or("artifact");
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 // ── POST /api/runs/:id/status ─────────────────────────────────────────────────
@@ -347,12 +488,43 @@ async fn update_run_status(
         _ => RunStatus::Queued,
     };
 
+    let terminal = matches!(
+        run_status,
+        RunStatus::Success | RunStatus::Failure | RunStatus::Cancelled
+    );
+
     if let Err(e) = state.store.update_run_status(&run_id, run_status).await {
         tracing::error!("update run status: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
+    if terminal {
+        evict_artifacts(&state).await;
+    }
+
     StatusCode::NO_CONTENT
+}
+
+/// Removes artifact directories and DB rows for runs beyond the retention window.
+async fn evict_artifacts(state: &AppState) {
+    let stale = match state.store.evict_old_artifact_runs().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("evict artifacts query: {e}");
+            return;
+        }
+    };
+    for run_id in stale {
+        let dir = state.artifacts_dir.join(&run_id);
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(run_id, "remove artifact dir: {e}");
+            }
+        }
+        if let Err(e) = state.store.delete_artifacts(&run_id).await {
+            tracing::warn!(run_id, "delete artifact rows: {e}");
+        }
+    }
 }
 
 // ── GET /api/repos ────────────────────────────────────────────────────────────
@@ -380,7 +552,9 @@ async fn create_repo_api(
     State(state): State<AppState>,
     Json(body): Json<CreateRepoBody>,
 ) -> impl IntoResponse {
-    let name = body.name.unwrap_or_else(|| repo_from_clone_url(&body.clone_url));
+    let name = body
+        .name
+        .unwrap_or_else(|| repo_from_clone_url(&body.clone_url));
     let repo = Repo {
         id: Uuid::new_v4().to_string(),
         name,
@@ -425,7 +599,10 @@ fn repo_from_clone_url(url: &str) -> String {
     // https://github.com/owner/repo.git  →  owner/repo
     // git@github.com:owner/repo.git      →  owner/repo
     let stripped = url.trim_end_matches(".git");
-    let after_colon = stripped.rsplit_once(':').map(|(_, r)| r).unwrap_or(stripped);
+    let after_colon = stripped
+        .rsplit_once(':')
+        .map(|(_, r)| r)
+        .unwrap_or(stripped);
     let parts: Vec<&str> = after_colon.trim_start_matches('/').split('/').collect();
     if parts.len() >= 2 {
         format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
@@ -456,7 +633,11 @@ async fn create_run(
     }
 
     tracing::info!(run_id = %run.id, repo = %run.repo, branch = %run.branch, "manual run queued");
-    (StatusCode::CREATED, Json(serde_json::json!({ "run_id": run.id }))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "run_id": run.id })),
+    )
+        .into_response()
 }
 
 // ── GET /api/runs ─────────────────────────────────────────────────────────────
@@ -480,10 +661,7 @@ struct RunDetail {
     steps: Vec<StepRecord>,
 }
 
-async fn get_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> impl IntoResponse {
     let run = match state.store.get_run(&run_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
@@ -510,10 +688,7 @@ struct LogEntry {
     line: String,
 }
 
-async fn get_logs(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_logs(State(state): State<AppState>, Path(run_id): Path<String>) -> impl IntoResponse {
     match state.store.get_logs(&run_id).await {
         Ok(rows) => {
             let entries: Vec<LogEntry> = rows

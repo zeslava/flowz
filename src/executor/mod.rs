@@ -16,11 +16,7 @@ pub struct StepOutcome {
 }
 
 pub trait Executor: Send + Sync {
-    fn run_step(
-        &self,
-        ctx: &StepContext,
-        on_line: &mut dyn FnMut(String),
-    ) -> Result<StepOutcome>;
+    fn run_step(&self, ctx: &StepContext, on_line: &mut dyn FnMut(String)) -> Result<StepOutcome>;
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, Default)]
@@ -64,7 +60,9 @@ impl Executor for StubExecutor {
 
         // Drain stderr in a separate thread to avoid deadlock
         let stderr_handle = std::thread::spawn(move || {
-            BufReader::new(stderr).lines().collect::<Result<Vec<_>, _>>()
+            BufReader::new(stderr)
+                .lines()
+                .collect::<Result<Vec<_>, _>>()
         });
 
         for line in BufReader::new(stdout).lines() {
@@ -120,7 +118,8 @@ fn build_dail_command(
 ) -> std::process::Command {
     // dail requires root — always run via doas
     let mut cmd = std::process::Command::new("doas");
-    cmd.arg(dail_bin).arg("run")
+    cmd.arg(dail_bin)
+        .arg("run")
         .arg(ctx.run_file)
         .arg("--name")
         .arg(jail_name)
@@ -158,11 +157,7 @@ impl Executor for DailExecutor {
         use std::process::Stdio;
 
         let run_prefix = &ctx.run_id[..ctx.run_id.len().min(8)];
-        let jail_name = sanitize_jail_name(&format!(
-            "flowz-{}-{}",
-            run_prefix,
-            ctx.step_name
-        ));
+        let jail_name = sanitize_jail_name(&format!("flowz-{}-{}", run_prefix, ctx.step_name));
 
         let _guard = JailGuard {
             dail_bin: self.dail_bin.clone(),
@@ -178,7 +173,9 @@ impl Executor for DailExecutor {
 
         // Drain stderr in a separate thread to avoid deadlock
         let stderr_handle = std::thread::spawn(move || {
-            BufReader::new(stderr).lines().collect::<Result<Vec<_>, _>>()
+            BufReader::new(stderr)
+                .lines()
+                .collect::<Result<Vec<_>, _>>()
         });
 
         for line in BufReader::new(stdout).lines() {
