@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(ui_runs))
         .route("/runs/{id}", get(ui_run))
+        .route("/favicon.png", get(favicon))
         .route("/webhook/github", post(github_webhook))
         .route("/api/jobs/poll", get(poll_job))
         .route("/api/runs/{id}/steps/{step}/logs", post(ingest_logs))
@@ -172,6 +173,15 @@ fn render<T: Template>(tmpl: T) -> axum::response::Response {
         Ok(html) => Html(html).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ── GET /favicon.png ──────────────────────────────────────────────────────────
+
+async fn favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../favicon.png").as_slice(),
+    )
 }
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
