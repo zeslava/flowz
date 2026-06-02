@@ -55,6 +55,14 @@ else
     echo "  visudo not found (pkg install sudo), skipping sudoers"
 fi
 
+# Enable in rc.conf before stop (service refuses to act without _enable=YES)
+if ! grep -q 'flowz_server_enable' /etc/rc.conf; then
+    echo 'flowz_server_enable="YES"' >> /etc/rc.conf
+fi
+if ! grep -q 'flowz_agent_enable' /etc/rc.conf; then
+    echo 'flowz_agent_enable="YES"' >> /etc/rc.conf
+fi
+
 # Stop services before replacing binary
 service flowz_server stop 2>/dev/null || true
 service flowz_agent stop 2>/dev/null || true
@@ -89,15 +97,7 @@ else
     echo "  ${AGENT_CFG_DST} (kept existing)"
 fi
 
-# rc.conf entries
-if ! grep -q 'flowz_server_enable' /etc/rc.conf; then
-    echo 'flowz_server_enable="YES"' >> /etc/rc.conf
-    echo "  Added flowz_server_enable to /etc/rc.conf"
-fi
-if ! grep -q 'flowz_agent_enable' /etc/rc.conf; then
-    echo 'flowz_agent_enable="YES"' >> /etc/rc.conf
-    echo "  Added flowz_agent_enable to /etc/rc.conf"
-fi
+echo "  /etc/rc.conf"
 
 echo ""
 echo "Done."
