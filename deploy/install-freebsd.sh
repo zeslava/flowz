@@ -1,0 +1,104 @@
+#!/bin/sh
+set -e
+
+BIN_SRC="target/release/flowz"
+BIN_DST="/usr/local/bin/flowz"
+RC_SERVER_SRC="deploy/flowz-server.rc"
+RC_AGENT_SRC="deploy/flowz-agent.rc"
+RC_SERVER_DST="/usr/local/etc/rc.d/flowz_server"
+RC_AGENT_DST="/usr/local/etc/rc.d/flowz_agent"
+CFG_DIR="/usr/local/etc/flowz"
+SERVER_CFG_SRC="deploy/flowz-server.yaml"
+AGENT_CFG_SRC="deploy/flowz-agent.yaml"
+SERVER_CFG_DST="${CFG_DIR}/server.yaml"
+AGENT_CFG_DST="${CFG_DIR}/agent.yaml"
+SUDOERS_SRC="deploy/flowz-agent.sudoers"
+SUDOERS_DST="/usr/local/etc/sudoers.d/flowz-agent"
+
+if [ ! -f "${BIN_SRC}" ]; then
+    echo "Binary not found at ${BIN_SRC}"
+    echo "Run: cargo build --release"
+    exit 1
+fi
+
+echo "Installing flowz..."
+
+# User and group
+pw groupshow flowz >/dev/null 2>&1 || pw groupadd flowz
+pw usershow  flowz >/dev/null 2>&1 || \
+    pw useradd flowz -g flowz -d /nonexistent -s /usr/sbin/nologin
+echo "  user flowz"
+
+# Data directories
+for dir in /var/db/flowz /var/db/flowz/work /var/db/flowz/artifacts \
+           /var/log/flowz /var/run/flowz; do
+    mkdir -p "${dir}"
+    chown flowz:flowz "${dir}"
+done
+echo "  data directories"
+
+# Sudoers
+if command -v visudo >/dev/null 2>&1; then
+    cp "${SUDOERS_SRC}" "${SUDOERS_DST}.tmp"
+    chmod 440 "${SUDOERS_DST}.tmp"
+    if visudo -cf "${SUDOERS_DST}.tmp"; then
+        mv "${SUDOERS_DST}.tmp" "${SUDOERS_DST}"
+        echo "  ${SUDOERS_DST}"
+    else
+        rm -f "${SUDOERS_DST}.tmp"
+        echo "  sudoers validation failed, skipping"
+    fi
+else
+    echo "  visudo not found (pkg install sudo), skipping sudoers"
+fi
+
+# Stop services before replacing binary
+service flowz_server stop 2>/dev/null || true
+service flowz_agent stop 2>/dev/null || true
+
+# Binary
+cp "${BIN_SRC}" "${BIN_DST}"
+chmod 755 "${BIN_DST}"
+echo "  ${BIN_DST}"
+
+# rc.d scripts
+cp "${RC_SERVER_SRC}" "${RC_SERVER_DST}"
+chmod 755 "${RC_SERVER_DST}"
+echo "  ${RC_SERVER_DST}"
+
+cp "${RC_AGENT_SRC}" "${RC_AGENT_DST}"
+chmod 755 "${RC_AGENT_DST}"
+echo "  ${RC_AGENT_DST}"
+
+# Config files (keep existing)
+mkdir -p "${CFG_DIR}"
+if [ ! -f "${SERVER_CFG_DST}" ]; then
+    cp "${SERVER_CFG_SRC}" "${SERVER_CFG_DST}"
+    echo "  ${SERVER_CFG_DST} (new)"
+else
+    echo "  ${SERVER_CFG_DST} (kept existing)"
+fi
+
+if [ ! -f "${AGENT_CFG_DST}" ]; then
+    cp "${AGENT_CFG_SRC}" "${AGENT_CFG_DST}"
+    echo "  ${AGENT_CFG_DST} (new)"
+else
+    echo "  ${AGENT_CFG_DST} (kept existing)"
+fi
+
+# rc.conf entries
+if ! grep -q 'flowz_server_enable' /etc/rc.conf; then
+    echo 'flowz_server_enable="YES"' >> /etc/rc.conf
+    echo "  Added flowz_server_enable to /etc/rc.conf"
+fi
+if ! grep -q 'flowz_agent_enable' /etc/rc.conf; then
+    echo 'flowz_agent_enable="YES"' >> /etc/rc.conf
+    echo "  Added flowz_agent_enable to /etc/rc.conf"
+fi
+
+echo ""
+echo "Done."
+echo "Next steps:"
+echo "  1. Edit ${SERVER_CFG_DST} — set webhook_secret"
+echo "  2. service flowz_server start"
+echo "  3. service flowz_agent start"

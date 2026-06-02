@@ -28,22 +28,22 @@ tasks:
   server:
     desc: Start flowz-server (reads flowz-server.yaml)
     cmds:
-      - cargo run --bin flowz-server
+      - cargo run --bin flowz -- server
 
   agent:
     desc: Start flowz-agent (reads flowz-agent.yaml)
     cmds:
-      - cargo run --bin flowz-agent
+      - cargo run --bin flowz -- agent
 
   dev:
     desc: Start server and agent in parallel
     deps: [build]
     cmds:
-      - cmd: ./target/debug/flowz-server &
+      - cmd: ./target/debug/flowz server &
         silent: false
       - cmd: sleep 1
         silent: true
-      - ./target/debug/flowz-agent
+      - ./target/debug/flowz agent
 
   webhook:
     desc: Send a test signed push webhook to localhost:7878

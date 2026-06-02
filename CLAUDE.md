@@ -38,7 +38,8 @@ End-to-end verification (Linux, StubExecutor):
 
 ## Architecture
 
-Single flat crate (`flowz`) with three binaries. Not a multi-crate workspace.
+Single flat crate (`flowz`) with one binary (`src/main.rs`) exposing subcommands
+(`flowz server`, `flowz agent`, `flowz validate|status|logs`). Not a multi-crate workspace.
 
 | Module | Role |
 |--------|------|
@@ -49,7 +50,7 @@ Single flat crate (`flowz`) with three binaries. Not a multi-crate workspace.
 | `src/store/` | SQLite adapter via `sqlx` (runtime queries, no compile-time macros) |
 | `src/server/` | axum HTTP server, UI routes (`GET /`, `GET /runs/{id}`), API |
 | `src/agent/` | Long-poll worker: claim job → git clone → run steps → POST logs/status |
-| `src/cli/` | CLI commands — stub, not yet implemented |
+| `src/cli/` | clap dispatcher: wires `server`/`agent`; `validate`/`status`/`logs` are stubs |
 
 **Agent ↔ server protocol:** long-poll `GET /api/jobs/poll` for job claim;
 `POST /api/runs/{id}/steps/{step}/logs` for log ingest;
@@ -60,7 +61,7 @@ Token flows from `flowz-server.yaml` → job payload → agent.
 
 ## Key conventions
 
-- Errors: `thiserror` in lib modules, `anyhow` in binaries (`src/bin/`).
+- Errors: `thiserror` in lib modules, `anyhow` in `src/main.rs` / `src/cli/`.
 - YAML parsing: `serde_yaml_ng` (maintained fork of serde-yaml).
 - Step order: `indexmap` preserves `.flowz.yaml` declaration order.
 - HTML templates: `askama` (compile-time), files in `templates/`.

@@ -4,16 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "flowz-server"
-path = "src/bin/server.rs"
-
-[[bin]]
-name = "flowz-agent"
-path = "src/bin/agent.rs"
-
-[[bin]]
 name = "flowz"
-path = "src/bin/cli.rs"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

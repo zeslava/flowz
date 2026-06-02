@@ -1,0 +1,1 @@
+flowz ALL=(root) NOPASSWD: /usr/local/bin/dail run *, /usr/local/bin/dail stop *, /usr/local/bin/dail ps, /usr/local/bin/dail logs *
