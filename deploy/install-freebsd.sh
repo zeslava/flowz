@@ -1,21 +1,20 @@
 #!/bin/sh
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
-REPO_DIR="$(dirname "${SCRIPT_DIR}")"
+REPO_DIR="$(pwd)"
 
 BIN_SRC="${REPO_DIR}/target/release/flowz"
 BIN_DST="/usr/local/bin/flowz"
-RC_SERVER_SRC="${SCRIPT_DIR}/flowz-server.rc"
-RC_AGENT_SRC="${SCRIPT_DIR}/flowz-agent.rc"
+RC_SERVER_SRC="${REPO_DIR}/deploy/flowz-server.rc"
+RC_AGENT_SRC="${REPO_DIR}/deploy/flowz-agent.rc"
 RC_SERVER_DST="/usr/local/etc/rc.d/flowz_server"
 RC_AGENT_DST="/usr/local/etc/rc.d/flowz_agent"
 CFG_DIR="/usr/local/etc/flowz"
-SERVER_CFG_SRC="${SCRIPT_DIR}/flowz-server.yaml"
-AGENT_CFG_SRC="${SCRIPT_DIR}/flowz-agent.yaml"
+SERVER_CFG_SRC="${REPO_DIR}/deploy/flowz-server.yaml"
+AGENT_CFG_SRC="${REPO_DIR}/deploy/flowz-agent.yaml"
 SERVER_CFG_DST="${CFG_DIR}/server.yaml"
 AGENT_CFG_DST="${CFG_DIR}/agent.yaml"
-SUDOERS_SRC="${SCRIPT_DIR}/flowz-agent.sudoers"
+SUDOERS_SRC="${REPO_DIR}/deploy/flowz-agent.sudoers"
 SUDOERS_DST="/usr/local/etc/sudoers.d/flowz-agent"
 
 if [ ! -f "${BIN_SRC}" ]; then
