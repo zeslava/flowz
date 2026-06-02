@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 REPO_DIR="$(dirname "${SCRIPT_DIR}")"
 
 BIN_SRC="${REPO_DIR}/target/release/flowz"
