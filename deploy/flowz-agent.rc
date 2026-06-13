@@ -15,7 +15,7 @@ load_rc_config $name
 : ${flowz_agent_user:="flowz"}
 : ${flowz_agent_config:="/usr/local/etc/flowz/agent.yaml"}
 : ${flowz_agent_log:="/var/log/flowz/agent.log"}
-: ${flowz_agent_workspace:="/tmp/flowz-workspaces"}
+: ${flowz_agent_workspace:="/var/db/flowz/work"}
 
 pidfile="/var/run/flowz/agent.pid"
 command="/usr/local/bin/flowz"
