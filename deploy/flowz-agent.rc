@@ -48,16 +48,19 @@ flowz_agent_start()
         "export FLOWZ_AGENT_CONFIG=${flowz_agent_config}; exec ${command} ${command_args}"
 }
 
+flowz_agent_match="${command} ${command_args}"
+
 flowz_agent_stop()
 {
-    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
-        _pid=$(cat ${pidfile})
+    if pgrep -f "${flowz_agent_match}" >/dev/null 2>&1; then
         echo "Stopping ${name}."
-        kill -TERM ${_pid} 2>/dev/null
+        # su forks under PAM, so the pidfile is unreliable; signal flowz (and
+        # its daemon/su wrappers) by command line. Graceful TERM, then KILL.
+        pkill -TERM -f "${flowz_agent_match}" 2>/dev/null
         _n=0
-        while kill -0 ${_pid} 2>/dev/null; do
+        while pgrep -f "${flowz_agent_match}" >/dev/null 2>&1; do
             _n=$((_n + 1))
-            [ ${_n} -eq 20 ] && kill -KILL ${_pid} 2>/dev/null
+            [ ${_n} -eq 20 ] && pkill -KILL -f "${flowz_agent_match}" 2>/dev/null
             [ ${_n} -ge 40 ] && break
             sleep 0.5
         done
@@ -69,8 +72,9 @@ flowz_agent_stop()
 
 flowz_agent_status()
 {
-    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
-        echo "${name} is running as pid $(cat ${pidfile})."
+    _pids=$(pgrep -f "${flowz_agent_match}")
+    if [ -n "${_pids}" ]; then
+        echo "${name} is running as pid ${_pids}."
     else
         echo "${name} is not running."
         return 1
