@@ -16,15 +16,15 @@ load_rc_config $name
 : ${flowz_agent_config:="/usr/local/etc/flowz/agent.yaml"}
 : ${flowz_agent_log:="/var/log/flowz/agent.log"}
 
-pidfile="/var/run/flowz/agent.pid"
-procname="/usr/local/bin/flowz"
+pidfile="/var/run/flowz/agent.pid"           # supervising daemon(8) PID
+childpidfile="/var/run/flowz/agent.child.pid" # actual flowz PID
+command="/usr/local/bin/flowz"
+command_args="agent"
+command_interpreter=""
 
-command="/usr/sbin/daemon"
-command_args="-f -p ${pidfile} -t ${name} \
-    -u ${flowz_agent_user} -o ${flowz_agent_log} \
-    /usr/bin/env FLOWZ_AGENT_CONFIG=${flowz_agent_config} ${procname} agent"
-
-start_precmd="flowz_agent_prestart"
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
 
 flowz_agent_prestart()
 {
@@ -36,6 +36,41 @@ flowz_agent_prestart()
     install -d -o ${flowz_agent_user} -g ${flowz_agent_user} $(dirname ${flowz_agent_log})
     touch ${flowz_agent_log}
     chown ${flowz_agent_user} ${flowz_agent_log}
+}
+
+flowz_agent_start()
+{
+    flowz_agent_prestart || return 1
+    echo "Starting ${name}."
+    # daemon -f starts its own session; -P records the supervisor PID (== the
+    # process-group leader), -p records the flowz PID. su may fork under PAM,
+    # so stop kills the whole process group to never leave an orphan.
+    /usr/sbin/daemon -f -P ${pidfile} -p ${childpidfile} -o ${flowz_agent_log} \
+        /usr/bin/su -m ${flowz_agent_user} -c \
+        "export FLOWZ_AGENT_CONFIG=${flowz_agent_config}; exec ${command} ${command_args}"
+}
+
+flowz_agent_stop()
+{
+    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
+        echo "Stopping ${name}."
+        # negative PID == signal the entire process group (daemon + su + flowz)
+        kill -TERM -- -$(cat ${pidfile}) 2>/dev/null
+        wait_for_pids $(cat ${pidfile}) $(cat ${childpidfile} 2>/dev/null)
+    else
+        echo "${name} is not running."
+    fi
+    rm -f ${pidfile} ${childpidfile}
+}
+
+flowz_agent_status()
+{
+    if [ -f "${childpidfile}" ] && kill -0 $(cat ${childpidfile}) 2>/dev/null; then
+        echo "${name} is running as pid $(cat ${childpidfile})."
+    else
+        echo "${name} is not running."
+        return 1
+    fi
 }
 
 run_rc_command "$1"
