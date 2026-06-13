@@ -60,9 +60,12 @@ flowz_agent_stop()
         _n=0
         while kill -0 -- -${_pgid} 2>/dev/null; do
             _n=$((_n + 1))
-            if [ ${_n} -ge 20 ]; then
+            if [ ${_n} -eq 20 ]; then
                 echo "${name} did not stop, sending SIGKILL."
                 kill -KILL -- -${_pgid} 2>/dev/null
+            fi
+            if [ ${_n} -ge 40 ]; then
+                echo "${name} still running after SIGKILL, giving up."
                 break
             fi
             sleep 0.5
