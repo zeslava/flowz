@@ -15,6 +15,7 @@ load_rc_config $name
 : ${flowz_agent_user:="flowz"}
 : ${flowz_agent_config:="/usr/local/etc/flowz/agent.yaml"}
 : ${flowz_agent_log:="/var/log/flowz/agent.log"}
+: ${flowz_agent_workspace:="/tmp/flowz-workspaces"}
 
 pidfile="/var/run/flowz/agent.pid"
 command="/usr/local/bin/flowz"
@@ -33,6 +34,7 @@ flowz_agent_prestart()
     fi
     install -d -o ${flowz_agent_user} -g ${flowz_agent_user} /var/run/flowz
     install -d -o ${flowz_agent_user} -g ${flowz_agent_user} $(dirname ${flowz_agent_log})
+    install -d -o ${flowz_agent_user} -g ${flowz_agent_user} ${flowz_agent_workspace}
     touch ${flowz_agent_log}
     chown ${flowz_agent_user} ${flowz_agent_log}
 }
