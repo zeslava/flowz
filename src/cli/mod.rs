@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::agent::{run_loop, AgentConfig};
+use crate::agent::{run_loop, AgentConfig, WorkspaceBackend};
 use crate::executor::ExecutorKind;
 use crate::server;
 use crate::store::Store;
@@ -148,6 +148,11 @@ struct AgentFileConfig {
     agent_name: String,
     #[serde(default = "default_workspace")]
     workspace_dir: PathBuf,
+    /// If set, run each job in a ZFS clone under this parent dataset (e.g.
+    /// `zroot/flowz/ws`) instead of a plain directory. Recommended on FreeBSD
+    /// with the Dail executor.
+    #[serde(default)]
+    zfs_pool: Option<String>,
     #[serde(default)]
     executor: ExecutorKind,
     #[serde(default)]
@@ -185,26 +190,37 @@ async fn run_agent() -> Result<()> {
             server_url,
             agent_name: default_agent_name(),
             workspace_dir: default_workspace(),
+            zfs_pool: None,
             executor: ExecutorKind::default(),
             dail_bin: None,
             priv_tool: None,
         }
     };
 
-    std::fs::create_dir_all(&config.workspace_dir)
-        .with_context(|| format!("create workspace dir {}", config.workspace_dir.display()))?;
+    let workspace = match &config.zfs_pool {
+        Some(pool) => WorkspaceBackend::Zfs { pool: pool.clone() },
+        None => {
+            std::fs::create_dir_all(&config.workspace_dir).with_context(|| {
+                format!("create workspace dir {}", config.workspace_dir.display())
+            })?;
+            WorkspaceBackend::Dir(config.workspace_dir.clone())
+        }
+    };
 
     tracing::info!(
         server = %config.server_url,
         agent = %config.agent_name,
-        workspace = %config.workspace_dir.display(),
+        workspace = match &config.zfs_pool {
+            Some(pool) => pool.clone(),
+            None => config.workspace_dir.display().to_string(),
+        },
         "agent starting"
     );
 
     run_loop(AgentConfig {
         server_url: config.server_url,
         agent_name: config.agent_name,
-        workspace_dir: config.workspace_dir,
+        workspace,
         executor: config.executor,
         dail_bin: config.dail_bin,
         priv_tool: config.priv_tool,

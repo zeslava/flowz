@@ -1,3 +1,7 @@
+mod workspace;
+
+pub use workspace::WorkspaceBackend;
+
 use crate::{
     executor::{ExecutorKind, StepContext},
     model::{Run, RunStatus, StepStatus},
@@ -7,12 +11,11 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub struct AgentConfig {
     pub server_url: String,
     pub agent_name: String,
-    pub workspace_dir: PathBuf,
+    pub workspace: WorkspaceBackend,
     pub executor: ExecutorKind,
     pub dail_bin: Option<String>,
     pub priv_tool: Option<String>,
@@ -61,11 +64,24 @@ async fn execute_run(
     run: &Run,
     github_token: Option<&str>,
 ) -> Result<()> {
-    let workspace = cfg.workspace_dir.join(&run.id);
-    std::fs::create_dir_all(&workspace)
-        .with_context(|| format!("create workspace {}", workspace.display()))?;
+    let priv_tool = cfg.priv_tool.as_deref().unwrap_or("doas");
+    let workspace = match workspace::prepare(&cfg.workspace, run, priv_tool) {
+        Ok(ws) => ws,
+        Err(e) => {
+            post_logs(
+                client,
+                &cfg.server_url,
+                &run.id,
+                "agent",
+                vec![format!("error: {e:#}")],
+            )
+            .await;
+            post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
+            return Err(e);
+        }
+    };
 
-    let result = do_execute(client, cfg, run, &workspace, github_token).await;
+    let result = do_execute(client, cfg, run, &workspace.path, github_token).await;
 
     if let Err(ref e) = result {
         post_logs(
@@ -79,49 +95,9 @@ async fn execute_run(
         post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
     }
 
-    cleanup_workspace(cfg, &run.id, &workspace);
+    workspace.cleanup(&run.id);
 
     result
-}
-
-/// Remove the job workspace. Files built inside a dail jail are owned by root, so a
-/// plain remove hits EACCES — fall back to a privileged `rm -rf` for the Dail executor.
-fn cleanup_workspace(cfg: &AgentConfig, run_id: &str, workspace: &Path) {
-    if !workspace.exists() {
-        return;
-    }
-    let err = match remove_dir_all_force(workspace) {
-        Ok(()) => return,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => e,
-    };
-
-    let Some(tool) = priv_cleanup_tool(cfg) else {
-        tracing::warn!(run_id, "cleanup workspace: {err}");
-        return;
-    };
-    match Command::new(&tool)
-        .arg("rm")
-        .arg("-rf")
-        .arg(workspace)
-        .status()
-    {
-        Ok(s) if s.success() => {}
-        Ok(s) => tracing::warn!(run_id, "cleanup workspace via {tool}: exit {s}"),
-        Err(pe) => tracing::warn!(run_id, "cleanup workspace via {tool}: {pe}"),
-    }
-}
-
-/// Privilege tool to use for cleanup, only for the Dail executor (jail files are root-owned).
-fn priv_cleanup_tool(cfg: &AgentConfig) -> Option<String> {
-    match cfg.executor {
-        ExecutorKind::Dail => Some(
-            cfg.priv_tool
-                .clone()
-                .unwrap_or_else(|| "doas".to_string()),
-        ),
-        ExecutorKind::Stub => None,
-    }
 }
 
 async fn do_execute(
@@ -131,8 +107,6 @@ async fn do_execute(
     workspace: &Path,
     github_token: Option<&str>,
 ) -> Result<()> {
-    // git clone
-    git_clone(&run.clone_url, workspace).context("git clone")?;
 
     // parse pipeline
     let yaml_path = workspace.join(".flowz.yaml");
@@ -309,19 +283,6 @@ async fn do_execute(
     Ok(())
 }
 
-fn git_clone(clone_url: &str, workspace: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(["clone", "--depth=1", clone_url, "."])
-        .current_dir(workspace)
-        .status()
-        .context("spawn git clone")?;
-
-    if !status.success() {
-        anyhow::bail!("git clone exited with {status}");
-    }
-    Ok(())
-}
-
 async fn post_logs(
     client: &Client,
     server_url: &str,
@@ -494,26 +455,4 @@ async fn post_commit_status(client: &Client, token: &str, repo: &str, sha: &str,
             tracing::warn!(repo, sha, "post commit status: {e}");
         }
     }
-}
-
-// git sets .git/objects dirs to 0555; make everything writable before removal.
-fn remove_dir_all_force(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    // ensure this dir is readable+writable+executable before touching its contents
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(perms.mode() | 0o700);
-        let _ = std::fs::set_permissions(path, perms);
-    }
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let p = entry.path();
-        if entry.file_type()?.is_dir() {
-            remove_dir_all_force(&p)?;
-            std::fs::remove_dir(&p)?;
-        } else {
-            std::fs::remove_file(&p)?;
-        }
-    }
-    std::fs::remove_dir(path)
 }
