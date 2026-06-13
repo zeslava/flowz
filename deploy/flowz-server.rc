@@ -17,13 +17,14 @@ load_rc_config $name
 : ${flowz_server_log:="/var/log/flowz/server.log"}
 
 pidfile="/var/run/flowz/server.pid"
-command="/usr/local/bin/flowz"
-command_args="server"
-command_interpreter=""
+procname="/usr/local/bin/flowz"
 
-start_cmd="${name}_start"
-stop_cmd="${name}_stop"
-status_cmd="${name}_status"
+command="/usr/sbin/daemon"
+command_args="-f -p ${pidfile} -t ${name} \
+    -u ${flowz_server_user} -o ${flowz_server_log} \
+    /usr/bin/env FLOWZ_CONFIG=${flowz_server_config} ${procname} server"
+
+start_precmd="flowz_server_prestart"
 
 flowz_server_prestart()
 {
@@ -31,40 +32,10 @@ flowz_server_prestart()
         echo "${flowz_server_config} not found"
         return 1
     fi
-    mkdir -p /var/run/flowz
-    chown ${flowz_server_user} /var/run/flowz
+    install -d -o ${flowz_server_user} -g ${flowz_server_user} /var/run/flowz
+    install -d -o ${flowz_server_user} -g ${flowz_server_user} $(dirname ${flowz_server_log})
     touch ${flowz_server_log}
     chown ${flowz_server_user} ${flowz_server_log}
-}
-
-flowz_server_start()
-{
-    flowz_server_prestart || return 1
-    echo "Starting ${name}."
-    /usr/sbin/daemon -f -P ${pidfile} -o ${flowz_server_log} \
-        /usr/bin/su -m ${flowz_server_user} -c \
-        "export FLOWZ_CONFIG=${flowz_server_config}; exec ${command} ${command_args}"
-}
-
-flowz_server_stop()
-{
-    if [ -f "${pidfile}" ]; then
-        echo "Stopping ${name}."
-        kill $(cat ${pidfile}) 2>/dev/null
-        rm -f ${pidfile}
-    else
-        echo "${name} is not running."
-    fi
-}
-
-flowz_server_status()
-{
-    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
-        echo "${name} is running as pid $(cat ${pidfile})."
-    else
-        echo "${name} is not running."
-        return 1
-    fi
 }
 
 run_rc_command "$1"

@@ -17,13 +17,14 @@ load_rc_config $name
 : ${flowz_agent_log:="/var/log/flowz/agent.log"}
 
 pidfile="/var/run/flowz/agent.pid"
-command="/usr/local/bin/flowz"
-command_args="agent"
-command_interpreter=""
+procname="/usr/local/bin/flowz"
 
-start_cmd="${name}_start"
-stop_cmd="${name}_stop"
-status_cmd="${name}_status"
+command="/usr/sbin/daemon"
+command_args="-f -p ${pidfile} -t ${name} \
+    -u ${flowz_agent_user} -o ${flowz_agent_log} \
+    /usr/bin/env FLOWZ_AGENT_CONFIG=${flowz_agent_config} ${procname} agent"
+
+start_precmd="flowz_agent_prestart"
 
 flowz_agent_prestart()
 {
@@ -31,40 +32,10 @@ flowz_agent_prestart()
         echo "${flowz_agent_config} not found"
         return 1
     fi
-    mkdir -p /var/run/flowz
-    chown ${flowz_agent_user} /var/run/flowz
+    install -d -o ${flowz_agent_user} -g ${flowz_agent_user} /var/run/flowz
+    install -d -o ${flowz_agent_user} -g ${flowz_agent_user} $(dirname ${flowz_agent_log})
     touch ${flowz_agent_log}
     chown ${flowz_agent_user} ${flowz_agent_log}
-}
-
-flowz_agent_start()
-{
-    flowz_agent_prestart || return 1
-    echo "Starting ${name}."
-    /usr/sbin/daemon -f -P ${pidfile} -o ${flowz_agent_log} \
-        /usr/bin/su -m ${flowz_agent_user} -c \
-        "export FLOWZ_AGENT_CONFIG=${flowz_agent_config}; exec ${command} ${command_args}"
-}
-
-flowz_agent_stop()
-{
-    if [ -f "${pidfile}" ]; then
-        echo "Stopping ${name}."
-        kill $(cat ${pidfile}) 2>/dev/null
-        rm -f ${pidfile}
-    else
-        echo "${name} is not running."
-    fi
-}
-
-flowz_agent_status()
-{
-    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
-        echo "${name} is running as pid $(cat ${pidfile})."
-    else
-        echo "${name} is not running."
-        return 1
-    fi
 }
 
 run_rc_command "$1"
