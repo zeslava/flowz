@@ -24,7 +24,7 @@ pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
             Ok(Some((run, github_token))) => {
                 tracing::info!(run_id = %run.id, repo = %run.repo, "claimed job");
                 if let Err(e) = execute_run(&client, &cfg, &run, github_token.as_deref()).await {
-                    tracing::error!(run_id = %run.id, "run failed: {e}");
+                    tracing::error!(run_id = %run.id, "run failed: {e:#}");
                 }
             }
             Ok(None) => {}
