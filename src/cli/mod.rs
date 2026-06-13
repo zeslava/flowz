@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 use crate::agent::{run_loop, AgentConfig};
 use crate::executor::ExecutorKind;
@@ -61,6 +62,10 @@ struct ServerConfig {
     artifacts_dir: PathBuf,
     webhook_secret: String,
     github_token: Option<String>,
+    #[serde(default)]
+    oidc: Option<server::OidcConfig>,
+    #[serde(default)]
+    jwt_secret: Option<String>,
 }
 
 fn default_listen() -> String {
@@ -93,6 +98,8 @@ async fn run_server() -> Result<()> {
             artifacts_dir: default_artifacts_dir(),
             webhook_secret: secret,
             github_token: std::env::var("FLOWZ_GITHUB_TOKEN").ok(),
+            oidc: server::OidcConfig::from_env(),
+            jwt_secret: std::env::var("FLOWZ_JWT_SECRET").ok(),
         }
     };
 
@@ -102,11 +109,31 @@ async fn run_server() -> Result<()> {
     std::fs::create_dir_all(&config.artifacts_dir)
         .with_context(|| format!("create artifacts dir {}", config.artifacts_dir.display()))?;
 
+    let oidc = config.oidc.or_else(server::OidcConfig::from_env);
+    let jwt_secret = config
+        .jwt_secret
+        .or_else(|| std::env::var("FLOWZ_JWT_SECRET").ok())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if oidc.is_some() {
+                tracing::warn!(
+                    "jwt_secret not set — generated a random one; sessions reset on restart. Set jwt_secret or FLOWZ_JWT_SECRET."
+                );
+            }
+            format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+        });
+
+    if oidc.is_some() {
+        tracing::info!("OIDC/ZID authentication enabled");
+    }
+
     let state = server::AppState {
         store,
         webhook_secret: config.webhook_secret,
         github_token: config.github_token,
         artifacts_dir: config.artifacts_dir,
+        oidc,
+        jwt_secret,
     };
 
     server::run(&config.listen, state).await

@@ -21,18 +21,23 @@ use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, path::PathBuf, time::Duration};
 use uuid::Uuid;
 
+pub mod auth;
+pub use auth::OidcConfig;
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
     pub webhook_secret: String,
     pub github_token: Option<String>,
     pub artifacts_dir: PathBuf,
+    /// OIDC/OAuth (ZID) config; when `None`, the server runs without authentication.
+    pub oidc: Option<OidcConfig>,
+    pub jwt_secret: String,
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/", get(ui_runs))
-        .route("/runs/{id}", get(ui_run))
+    // Open routes: agent protocol (machine), webhook (HMAC), favicon, auth flow.
+    let open = Router::new()
         .route("/favicon.png", get(favicon))
         .route("/webhook/github", post(github_webhook))
         .route("/api/jobs/poll", get(poll_job))
@@ -41,16 +46,32 @@ pub fn router(state: AppState) -> Router {
             "/api/runs/{id}/steps/{step}/artifacts/{*path}",
             post(upload_artifact),
         )
+        .route("/api/runs/{id}/status", post(update_run_status))
+        .route("/auth/zid/login", get(auth::login))
+        .route("/auth/zid/callback", get(auth::callback))
+        .route("/auth/logout", get(auth::logout).post(auth::logout));
+
+    // Protected routes: UI pages + read API. Gated only when OIDC is configured.
+    let mut protected = Router::new()
+        .route("/", get(ui_runs))
+        .route("/runs/{id}", get(ui_run))
         .route("/api/runs/{id}/artifacts", get(list_artifacts_api))
         .route("/api/runs/{id}/artifacts/{*path}", get(download_artifact))
-        .route("/api/runs/{id}/status", post(update_run_status))
         .route("/api/repos", get(list_repos_api).post(create_repo_api))
         .route("/api/repos/{id}", axum::routing::delete(delete_repo_api))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/runs/{id}/logs", get(get_logs))
-        .route("/api/runs/{id}/logs/stream", get(stream_logs))
-        .with_state(state)
+        .route("/api/runs/{id}/logs/stream", get(stream_logs));
+
+    if state.oidc.is_some() {
+        protected = protected.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+    }
+
+    open.merge(protected).with_state(state)
 }
 
 // ── View models ───────────────────────────────────────────────────────────────
