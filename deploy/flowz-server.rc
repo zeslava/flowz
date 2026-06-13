@@ -16,8 +16,7 @@ load_rc_config $name
 : ${flowz_server_config:="/usr/local/etc/flowz/server.yaml"}
 : ${flowz_server_log:="/var/log/flowz/server.log"}
 
-pidfile="/var/run/flowz/server.pid"          # supervising daemon(8) PID
-childpidfile="/var/run/flowz/server.child.pid" # actual flowz PID
+pidfile="/var/run/flowz/server.pid"
 command="/usr/local/bin/flowz"
 command_args="server"
 command_interpreter=""
@@ -42,10 +41,9 @@ flowz_server_start()
 {
     flowz_server_prestart || return 1
     echo "Starting ${name}."
-    # daemon -f starts its own session; -P records the supervisor PID (== the
-    # process-group leader), -p records the flowz PID. su may fork under PAM,
-    # so stop kills the whole process group to never leave an orphan.
-    /usr/sbin/daemon -f -P ${pidfile} -p ${childpidfile} -o ${flowz_server_log} \
+    # daemon -f (no -r) forks the process and writes its PID to -P pidfile;
+    # su -m -c "exec ..." replaces itself with flowz, so pidfile == flowz PID.
+    /usr/sbin/daemon -f -P ${pidfile} -o ${flowz_server_log} \
         /usr/bin/su -m ${flowz_server_user} -c \
         "export FLOWZ_CONFIG=${flowz_server_config}; exec ${command} ${command_args}"
 }
@@ -53,33 +51,26 @@ flowz_server_start()
 flowz_server_stop()
 {
     if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
-        _pgid=$(cat ${pidfile})
+        _pid=$(cat ${pidfile})
         echo "Stopping ${name}."
-        # negative PID == signal the entire process group (daemon + su + flowz)
-        kill -TERM -- -${_pgid} 2>/dev/null
+        kill -TERM ${_pid} 2>/dev/null
         _n=0
-        while kill -0 -- -${_pgid} 2>/dev/null; do
+        while kill -0 ${_pid} 2>/dev/null; do
             _n=$((_n + 1))
-            if [ ${_n} -eq 20 ]; then
-                echo "${name} did not stop, sending SIGKILL."
-                kill -KILL -- -${_pgid} 2>/dev/null
-            fi
-            if [ ${_n} -ge 40 ]; then
-                echo "${name} still running after SIGKILL, giving up."
-                break
-            fi
+            [ ${_n} -eq 20 ] && kill -KILL ${_pid} 2>/dev/null
+            [ ${_n} -ge 40 ] && break
             sleep 0.5
         done
     else
         echo "${name} is not running."
     fi
-    rm -f ${pidfile} ${childpidfile}
+    rm -f ${pidfile}
 }
 
 flowz_server_status()
 {
-    if [ -f "${childpidfile}" ] && kill -0 $(cat ${childpidfile}) 2>/dev/null; then
-        echo "${name} is running as pid $(cat ${childpidfile})."
+    if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
+        echo "${name} is running as pid $(cat ${pidfile})."
     else
         echo "${name} is not running."
         return 1
