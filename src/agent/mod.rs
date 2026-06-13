@@ -60,7 +60,8 @@ async fn execute_run(
     github_token: Option<&str>,
 ) -> Result<()> {
     let workspace = cfg.workspace_dir.join(&run.id);
-    std::fs::create_dir_all(&workspace).context("create workspace")?;
+    std::fs::create_dir_all(&workspace)
+        .with_context(|| format!("create workspace {}", workspace.display()))?;
 
     let result = do_execute(client, cfg, run, &workspace, github_token).await;
 
