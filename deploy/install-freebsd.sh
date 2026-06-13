@@ -16,6 +16,8 @@ SERVER_CFG_DST="${CFG_DIR}/server.yaml"
 AGENT_CFG_DST="${CFG_DIR}/agent.yaml"
 SUDOERS_SRC="${REPO_DIR}/deploy/flowz-agent.sudoers"
 SUDOERS_DST="/usr/local/etc/sudoers.d/flowz-agent"
+DOAS_SRC="${REPO_DIR}/deploy/flowz-agent.doas.conf"
+DOAS_DST="/usr/local/etc/doas.conf"
 
 if [ ! -f "${BIN_SRC}" ]; then
     echo "Binary not found at ${BIN_SRC}"
@@ -39,8 +41,16 @@ for dir in /var/db/flowz /var/db/flowz/work /var/db/flowz/artifacts \
 done
 echo "  data directories"
 
-# Sudoers
-if command -v visudo >/dev/null 2>&1; then
+# Privilege escalation: prefer doas (FreeBSD-idiomatic), fall back to sudo
+if command -v doas >/dev/null 2>&1; then
+    DOAS_RULE="$(cat "${DOAS_SRC}")"
+    if [ ! -f "${DOAS_DST}" ] || ! grep -qF "${DOAS_RULE}" "${DOAS_DST}"; then
+        printf '%s\n' "${DOAS_RULE}" >> "${DOAS_DST}"
+        echo "  ${DOAS_DST} (appended)"
+    else
+        echo "  ${DOAS_DST} (rule present)"
+    fi
+elif command -v visudo >/dev/null 2>&1; then
     cp "${SUDOERS_SRC}" "${SUDOERS_DST}.tmp"
     chmod 440 "${SUDOERS_DST}.tmp"
     if visudo -cf "${SUDOERS_DST}.tmp"; then
@@ -51,7 +61,7 @@ if command -v visudo >/dev/null 2>&1; then
         echo "  sudoers validation failed, skipping"
     fi
 else
-    echo "  visudo not found (pkg install sudo), skipping sudoers"
+    echo "  neither doas nor sudo found (pkg install doas), skipping"
 fi
 
 # Enable in rc.conf before stop (service refuses to act without _enable=YES)

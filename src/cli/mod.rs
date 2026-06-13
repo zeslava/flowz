@@ -123,6 +123,10 @@ struct AgentFileConfig {
     workspace_dir: PathBuf,
     #[serde(default)]
     executor: ExecutorKind,
+    #[serde(default)]
+    dail_bin: Option<String>,
+    #[serde(default)]
+    priv_tool: Option<String>,
 }
 
 fn default_agent_name() -> String {
@@ -155,6 +159,8 @@ async fn run_agent() -> Result<()> {
             agent_name: default_agent_name(),
             workspace_dir: default_workspace(),
             executor: ExecutorKind::default(),
+            dail_bin: None,
+            priv_tool: None,
         }
     };
 
@@ -173,6 +179,8 @@ async fn run_agent() -> Result<()> {
         agent_name: config.agent_name,
         workspace_dir: config.workspace_dir,
         executor: config.executor,
+        dail_bin: config.dail_bin,
+        priv_tool: config.priv_tool,
     })
     .await
 }

@@ -14,6 +14,8 @@ pub struct AgentConfig {
     pub agent_name: String,
     pub workspace_dir: PathBuf,
     pub executor: ExecutorKind,
+    pub dail_bin: Option<String>,
+    pub priv_tool: Option<String>,
 }
 
 pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
@@ -155,6 +157,8 @@ async fn do_execute(
             let step_name_owned = step_name.clone();
             let run_id = run.id.clone();
             let executor_kind = cfg.executor;
+            let dail_bin = cfg.dail_bin.clone();
+            let priv_tool = cfg.priv_tool.clone();
 
             let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(256);
 
@@ -187,7 +191,7 @@ async fn do_execute(
                     workspace: &workspace,
                     env,
                 };
-                let executor = executor_kind.build();
+                let executor = executor_kind.build(dail_bin, priv_tool);
                 executor.run_step(&ctx, &mut |line| {
                     let _ = log_tx.blocking_send(line);
                 })
