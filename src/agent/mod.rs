@@ -79,11 +79,49 @@ async fn execute_run(
         post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
     }
 
-    if let Err(e) = remove_dir_all_force(&workspace) {
-        tracing::warn!(run_id = %run.id, "cleanup workspace: {e}");
-    }
+    cleanup_workspace(cfg, &run.id, &workspace);
 
     result
+}
+
+/// Remove the job workspace. Files built inside a dail jail are owned by root, so a
+/// plain remove hits EACCES — fall back to a privileged `rm -rf` for the Dail executor.
+fn cleanup_workspace(cfg: &AgentConfig, run_id: &str, workspace: &Path) {
+    if !workspace.exists() {
+        return;
+    }
+    let err = match remove_dir_all_force(workspace) {
+        Ok(()) => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => e,
+    };
+
+    let Some(tool) = priv_cleanup_tool(cfg) else {
+        tracing::warn!(run_id, "cleanup workspace: {err}");
+        return;
+    };
+    match Command::new(&tool)
+        .arg("rm")
+        .arg("-rf")
+        .arg(workspace)
+        .status()
+    {
+        Ok(s) if s.success() => {}
+        Ok(s) => tracing::warn!(run_id, "cleanup workspace via {tool}: exit {s}"),
+        Err(pe) => tracing::warn!(run_id, "cleanup workspace via {tool}: {pe}"),
+    }
+}
+
+/// Privilege tool to use for cleanup, only for the Dail executor (jail files are root-owned).
+fn priv_cleanup_tool(cfg: &AgentConfig) -> Option<String> {
+    match cfg.executor {
+        ExecutorKind::Dail => Some(
+            cfg.priv_tool
+                .clone()
+                .unwrap_or_else(|| "doas".to_string()),
+        ),
+        ExecutorKind::Stub => None,
+    }
 }
 
 async fn do_execute(
