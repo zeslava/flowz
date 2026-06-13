@@ -53,10 +53,20 @@ flowz_server_start()
 flowz_server_stop()
 {
     if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
+        _pgid=$(cat ${pidfile})
         echo "Stopping ${name}."
         # negative PID == signal the entire process group (daemon + su + flowz)
-        kill -TERM -- -$(cat ${pidfile}) 2>/dev/null
-        wait_for_pids $(cat ${pidfile}) $(cat ${childpidfile} 2>/dev/null)
+        kill -TERM -- -${_pgid} 2>/dev/null
+        _n=0
+        while kill -0 -- -${_pgid} 2>/dev/null; do
+            _n=$((_n + 1))
+            if [ ${_n} -ge 20 ]; then
+                echo "${name} did not stop, sending SIGKILL."
+                kill -KILL -- -${_pgid} 2>/dev/null
+                break
+            fi
+            sleep 0.5
+        done
     else
         echo "${name} is not running."
     fi
