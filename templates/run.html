@@ -44,7 +44,7 @@
   <p><a href="/">← all runs</a></p>
   <h1>Run <code>{{ run.id_short }}</code> — <span class="s-{{ run.status }}">{{ run.status }}</span></h1>
   <div class="meta">
-    {{ run.repo }} · {{ run.branch }} · <code>{{ run.commit_short }}</code> · {{ run.created_at }}
+    {{ run.repo }} · {{ run.branch }} · <code>{{ run.commit_short }}</code> · {{ run.created_at }}{% if !run.duration.is_empty() %} · took {{ run.duration }}{% endif %}
   </div>
 
   {% if run.status == "failure" %}

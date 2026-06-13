@@ -84,10 +84,17 @@ struct RunRow {
     commit_short: String,
     status: String,
     created_at: String,
+    duration: String,
 }
 
 impl From<&Run> for RunRow {
     fn from(r: &Run) -> Self {
+        let duration = match r.status {
+            RunStatus::Success | RunStatus::Failure | RunStatus::Cancelled => {
+                human_duration(r.updated_at - r.created_at)
+            }
+            _ => String::new(),
+        };
         RunRow {
             id_short: r.id[..8.min(r.id.len())].to_string(),
             id: r.id.clone(),
@@ -96,6 +103,7 @@ impl From<&Run> for RunRow {
             commit_short: r.commit[..7.min(r.commit.len())].to_string(),
             status: run_status_str(&r.status).to_string(),
             created_at: r.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            duration,
         }
     }
 }
@@ -149,6 +157,17 @@ fn human_size(bytes: i64) -> String {
         format!("{bytes} B")
     } else {
         format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+fn human_duration(d: chrono::Duration) -> String {
+    let secs = d.num_seconds().max(0);
+    if secs >= 3600 {
+        format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
     }
 }
 

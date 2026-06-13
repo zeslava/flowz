@@ -138,6 +138,7 @@
         <th>Commit</th>
         <th>Status</th>
         <th>Created</th>
+        <th>Duration</th>
       </tr>
     </thead>
     <tbody>
@@ -149,6 +150,7 @@
         <td><code>{{ r.commit_short }}</code></td>
         <td class="s-{{ r.status }}">{{ r.status }}</td>
         <td>{{ r.created_at }}</td>
+        <td>{{ r.duration }}</td>
       </tr>
       {% endfor %}
     </tbody>

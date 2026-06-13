@@ -1,1 +1,1 @@
-flowz ALL=(root) NOPASSWD: /usr/local/bin/dail *
+flowz ALL=(root) NOPASSWD: /usr/local/bin/dail *, /sbin/zfs *, /usr/local/bin/git *
