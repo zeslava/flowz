@@ -3,7 +3,7 @@ mod workspace;
 pub use workspace::WorkspaceBackend;
 
 use crate::{
-    executor::{ExecutorKind, StepContext},
+    executor::{Executor, ExecutorKind, HostExecutor, StepContext},
     model::{Run, RunStatus, StepStatus},
     pipeline,
 };
@@ -150,12 +150,11 @@ async fn do_execute(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let ctx = StepContext {
-            run_id: &run.id,
-            step_name,
-            run_file: &step.run,
-            workspace,
-            env,
+        // Determine script path and executor based on step type.
+        let (script, is_host_exec) = match (&step.run, &step.exec) {
+            (Some(run), None) => (run.clone(), false),
+            (None, Some(exec)) => (exec.clone(), true),
+            _ => unreachable!("pipeline validation guarantees exactly one action"),
         };
 
         // run_step is sync — run in blocking thread pool.
@@ -163,9 +162,9 @@ async fn do_execute(
         // single async consumer that naturally batches bursty output and sends
         // one HTTP request per burst instead of one per line.
         let outcome = {
-            let run_file = step.run.clone();
+            let run_file = script;
             let workspace = workspace.to_path_buf();
-            let env = ctx.env.clone();
+
             let step_name_owned = step_name.clone();
             let run_id = run.id.clone();
             let executor_kind = cfg.executor;
@@ -195,7 +194,7 @@ async fn do_execute(
                 }
             });
 
-            let blocking_result = tokio::task::spawn_blocking(move || {
+            let blocking_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 let ctx = StepContext {
                     run_id: &run_id,
                     step_name: &step_name_owned,
@@ -203,7 +202,11 @@ async fn do_execute(
                     workspace: &workspace,
                     env,
                 };
-                let executor = executor_kind.build(dail_bin, priv_tool);
+                let executor: Box<dyn Executor> = if is_host_exec {
+                    Box::new(HostExecutor)
+                } else {
+                    executor_kind.build(dail_bin, priv_tool)
+                };
                 executor.run_step(&ctx, &mut |line| {
                     let _ = log_tx.blocking_send(line);
                 })

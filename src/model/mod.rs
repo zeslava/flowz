@@ -21,7 +21,8 @@ pub enum Trigger {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Step {
-    pub run: String,
+    pub run: Option<String>,
+    pub exec: Option<String>,
     #[serde(default)]
     pub needs: Vec<String>,
     pub only: Option<Only>,

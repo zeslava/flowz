@@ -14,6 +14,10 @@ pub enum PipelineError {
     InvalidRunPath { step: String, path: String },
     #[error("step '{step}': invalid artifact path '{path}'")]
     InvalidArtifactPath { step: String, path: String },
+    #[error("step '{0}': must specify exactly one of 'run' or 'exec'")]
+    MissingAction(String),
+    #[error("step '{0}': cannot specify both 'run' and 'exec'")]
+    AmbiguousAction(String),
     #[error("yaml parse error: {0}")]
     Parse(#[from] serde_yaml_ng::Error),
 }
@@ -32,12 +36,20 @@ pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
     let step_names: HashSet<&str> = pf.steps.keys().map(String::as_str).collect();
 
     for (name, step) in &pf.steps {
+        match (&step.run, &step.exec) {
+            (None, None) => return Err(PipelineError::MissingAction(name.clone())),
+            (Some(_), Some(_)) => return Err(PipelineError::AmbiguousAction(name.clone())),
+            _ => {}
+        }
+
         // run must be a relative path, no absolute or parent traversal
-        if step.run.starts_with('/') || step.run.contains("../") {
-            return Err(PipelineError::InvalidRunPath {
-                step: name.clone(),
-                path: step.run.clone(),
-            });
+        if let Some(run) = &step.run {
+            if run.starts_with('/') || run.contains("../") {
+                return Err(PipelineError::InvalidRunPath {
+                    step: name.clone(),
+                    path: run.clone(),
+                });
+            }
         }
 
         // artifact paths must be relative, no absolute or parent traversal
@@ -202,6 +214,49 @@ steps:
         assert!(matches!(
             parse(yaml),
             Err(PipelineError::InvalidRunPath { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_exec_step() {
+        let yaml = r#"
+version: 1
+steps:
+  deploy:
+    exec: ci/deploy.sh
+    needs: []
+"#;
+        let pf = parse(yaml).unwrap();
+        assert!(pf.steps["deploy"].exec.is_some());
+        assert!(pf.steps["deploy"].run.is_none());
+    }
+
+    #[test]
+    fn rejects_step_without_action() {
+        let yaml = r#"
+version: 1
+steps:
+  bad:
+    needs: []
+"#;
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::MissingAction(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_step_with_both_actions() {
+        let yaml = r#"
+version: 1
+steps:
+  bad:
+    run: ci/build.sh
+    exec: ci/deploy.sh
+"#;
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::AmbiguousAction(_))
         ));
     }
 }
