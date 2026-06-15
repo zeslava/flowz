@@ -65,6 +65,20 @@ async fn execute_run(
     github_token: Option<&str>,
 ) -> Result<()> {
     let priv_tool = cfg.priv_tool.as_deref().unwrap_or("doas");
+    let authed_run;
+    let run = if let Some(token) = github_token {
+        if let Some(rest) = run.clone_url.strip_prefix("https://") {
+            authed_run = Run {
+                clone_url: format!("https://{token}@{rest}"),
+                ..run.clone()
+            };
+            &authed_run
+        } else {
+            run
+        }
+    } else {
+        run
+    };
     let workspace = match workspace::prepare(&cfg.workspace, run, priv_tool) {
         Ok(ws) => ws,
         Err(e) => {
