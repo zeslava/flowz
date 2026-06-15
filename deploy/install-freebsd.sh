@@ -19,11 +19,8 @@ SUDOERS_DST="/usr/local/etc/sudoers.d/flowz-agent"
 DOAS_SRC="${REPO_DIR}/deploy/flowz-agent.doas.conf"
 DOAS_DST="/usr/local/etc/doas.conf"
 
-if [ ! -f "${BIN_SRC}" ]; then
-    echo "Binary not found at ${BIN_SRC}"
-    echo "Run: cargo build --release"
-    exit 1
-fi
+echo "Building flowz..."
+cargo build --release
 
 echo "Installing flowz..."
 
@@ -110,7 +107,8 @@ echo "  /etc/rc.conf"
 
 echo ""
 echo "Done."
-echo "Next steps:"
-echo "  1. Edit ${SERVER_CFG_DST} — set webhook_secret"
-echo "  2. doas service flowz_server start"
-echo "  3. doas service flowz_agent start"
+echo "  Edit ${SERVER_CFG_DST} if needed (webhook_secret, github_token, etc.)"
+echo ""
+
+doas service flowz_server start
+doas service flowz_agent start
