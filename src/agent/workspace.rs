@@ -151,6 +151,12 @@ fn prepare_zfs(pool: &str, priv_tool: &str, run: &Run) -> Result<Workspace> {
 
     let path = mountpoint(priv_tool, &clone_ds).context("resolve clone mountpoint")?;
 
+    // The ZFS clone is created by root via priv_tool; chown the root of the
+    // mountpoint to the current (agent) user so exec: steps can write to it.
+    let uid = uid_gid()?;
+    priv_cmd(priv_tool, "chown", &[&uid, &path.to_string_lossy()])
+        .context("chown clone mountpoint")?;
+
     Ok(Workspace {
         path,
         cleanup: Cleanup::Zfs {
@@ -238,6 +244,23 @@ fn mountpoint(priv_tool: &str, ds: &str) -> Result<PathBuf> {
         anyhow::bail!("dataset {ds} has no mountpoint ({mp})");
     }
     Ok(PathBuf::from(mp))
+}
+
+/// Returns "uid:gid" for the current process, used for chown.
+fn uid_gid() -> Result<String> {
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .context("spawn id -u")?;
+    let gid = std::process::Command::new("id")
+        .arg("-g")
+        .output()
+        .context("spawn id -g")?;
+    Ok(format!(
+        "{}:{}",
+        String::from_utf8_lossy(&uid.stdout).trim(),
+        String::from_utf8_lossy(&gid.stdout).trim()
+    ))
 }
 
 fn zfs(priv_tool: &str, args: &[&str]) -> Result<()> {
