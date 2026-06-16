@@ -95,6 +95,18 @@ async fn execute_run(
         }
     };
 
+    post_logs(
+        client,
+        &cfg.server_url,
+        &run.id,
+        "agent",
+        vec![
+            format!("cloned {repo} @ {commit}", repo = run.repo, commit = &run.commit[..run.commit.len().min(12)]),
+            format!("workspace: {}", workspace.path.display()),
+        ],
+    )
+    .await;
+
     let result = do_execute(client, cfg, run, &workspace.path, github_token).await;
 
     if let Err(ref e) = result {
