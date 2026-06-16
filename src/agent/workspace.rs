@@ -176,7 +176,16 @@ fn ensure_repo_dataset(priv_tool: &str, repo_ds: &str, run: &Run) -> Result<()> 
     let mp = mountpoint(priv_tool, repo_ds).context("resolve repo mountpoint")?;
     let mp = mp.to_string_lossy();
     git(priv_tool, &["-C", &mp, "fetch", "--all", "--prune"]).context("git fetch")?;
-    git(priv_tool, &["-C", &mp, "checkout", "-f", &run.commit]).context("git checkout")?;
+    // If commit is a real SHA use it directly; otherwise (e.g. "HEAD" from the
+    // build button) reset to the remote tracking branch so we get latest code.
+    let checkout_ref = if run.commit.len() == 40
+        && run.commit.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        run.commit.clone()
+    } else {
+        format!("origin/{}", run.branch)
+    };
+    git(priv_tool, &["-C", &mp, "checkout", "-f", &checkout_ref]).context("git checkout")?;
     Ok(())
 }
 
