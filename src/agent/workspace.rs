@@ -173,15 +173,19 @@ fn ensure_repo_dataset(priv_tool: &str, repo_ds: &str, run: &Run) -> Result<()> 
     if !dataset_exists(priv_tool, repo_ds) {
         zfs(priv_tool, &["create", "-p", repo_ds]).context("zfs create repo dataset")?;
         let mp = mountpoint(priv_tool, repo_ds).context("resolve repo mountpoint")?;
+        // Dataset created by root; chown mountpoint so git runs as agent user.
+        let uid = uid_gid()?;
+        priv_cmd(priv_tool, "chown", &[&uid, &mp.to_string_lossy()])
+            .context("chown repo mountpoint")?;
         let mp = mp.to_string_lossy();
-        git(priv_tool, &["clone", &run.clone_url, &mp]).context("git clone")?;
-        git(priv_tool, &["-C", &mp, "checkout", "-f", &run.commit]).context("git checkout")?;
+        git(&["clone", &run.clone_url, &mp]).context("git clone")?;
+        git(&["-C", &mp, "checkout", "-f", &run.commit]).context("git checkout")?;
         return Ok(());
     }
 
     let mp = mountpoint(priv_tool, repo_ds).context("resolve repo mountpoint")?;
     let mp = mp.to_string_lossy();
-    git(priv_tool, &["-C", &mp, "fetch", "--all", "--prune"]).context("git fetch")?;
+    git(&["-C", &mp, "fetch", "--all", "--prune"]).context("git fetch")?;
     // If commit is a real SHA use it directly; otherwise (e.g. "HEAD" from the
     // build button) reset to the remote tracking branch so we get latest code.
     let checkout_ref = if run.commit.len() == 40
@@ -191,7 +195,7 @@ fn ensure_repo_dataset(priv_tool: &str, repo_ds: &str, run: &Run) -> Result<()> 
     } else {
         format!("origin/{}", run.branch)
     };
-    git(priv_tool, &["-C", &mp, "checkout", "-f", &checkout_ref]).context("git checkout")?;
+    git(&["-C", &mp, "checkout", "-f", &checkout_ref]).context("git checkout")?;
     Ok(())
 }
 
@@ -267,8 +271,8 @@ fn zfs(priv_tool: &str, args: &[&str]) -> Result<()> {
     priv_cmd(priv_tool, "zfs", args)
 }
 
-fn git(priv_tool: &str, args: &[&str]) -> Result<()> {
-    priv_cmd(priv_tool, "git", args)
+fn git(args: &[&str]) -> Result<()> {
+    run_cmd("git", args)
 }
 
 fn priv_cmd(priv_tool: &str, bin: &str, args: &[&str]) -> Result<()> {
@@ -280,6 +284,21 @@ fn priv_cmd(priv_tool: &str, bin: &str, args: &[&str]) -> Result<()> {
     if !out.status.success() {
         anyhow::bail!(
             "{priv_tool} {bin} {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn run_cmd(bin: &str, args: &[&str]) -> Result<()> {
+    let out = Command::new(bin)
+        .args(args)
+        .output()
+        .with_context(|| format!("spawn {bin} {}", args.join(" ")))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "{bin} {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         );
