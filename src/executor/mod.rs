@@ -48,6 +48,21 @@ impl ExecutorKind {
 // HostExecutor: runs `sh <script>` directly on the agent host — used for exec: steps.
 pub struct HostExecutor;
 
+/// Returns the home directory for the current user from /etc/passwd.
+/// Used as a fallback when HOME is unset or is "/" (common in service environments).
+fn detect_home() -> Option<String> {
+    let uid_out = std::process::Command::new("id").arg("-u").output().ok()?;
+    let uid = String::from_utf8(uid_out.stdout).ok()?.trim().to_string();
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let f: Vec<&str> = line.splitn(7, ':').collect();
+        if f.len() >= 6 && f[2] == uid {
+            return Some(f[5].to_string());
+        }
+    }
+    None
+}
+
 impl Executor for HostExecutor {
     fn run_step(&self, ctx: &StepContext, on_line: &mut dyn FnMut(String)) -> Result<StepOutcome> {
         use std::io::{BufRead, BufReader};
@@ -58,6 +73,13 @@ impl Executor for HostExecutor {
             .current_dir(ctx.workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // Ensure HOME is set — service environments often leave it unset or as "/".
+        if std::env::var("HOME").map(|h| h.is_empty() || h == "/").unwrap_or(true) {
+            if let Some(home) = detect_home() {
+                cmd.env("HOME", home);
+            }
+        }
 
         for (k, v) in &ctx.env {
             cmd.env(k, v);
