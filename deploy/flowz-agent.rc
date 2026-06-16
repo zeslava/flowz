@@ -47,7 +47,7 @@ flowz_agent_start()
     # su -m -c "exec ..." replaces itself with flowz, so pidfile == flowz PID.
     /usr/sbin/daemon -f -P ${pidfile} -o ${flowz_agent_log} \
         /usr/bin/su -m ${flowz_agent_user} -c \
-        "export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin; export FLOWZ_AGENT_CONFIG=${flowz_agent_config}; exec ${command} ${command_args}"
+        "export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin; export HOME=$(pw usershow ${flowz_agent_user} | cut -d: -f9); export FLOWZ_AGENT_CONFIG=${flowz_agent_config}; exec ${command} ${command_args}"
 }
 
 flowz_agent_match="${command} ${command_args}"

@@ -159,6 +159,10 @@ struct AgentFileConfig {
     dail_bin: Option<String>,
     #[serde(default)]
     priv_tool: Option<String>,
+    /// HOME directory for exec: steps. Set when the agent runs as a service
+    /// user with a non-existent home (e.g. /nonexistent on FreeBSD).
+    #[serde(default)]
+    home_dir: Option<String>,
 }
 
 fn default_agent_name() -> String {
@@ -194,6 +198,7 @@ async fn run_agent() -> Result<()> {
             executor: ExecutorKind::default(),
             dail_bin: None,
             priv_tool: None,
+            home_dir: None,
         }
     };
 
@@ -224,6 +229,7 @@ async fn run_agent() -> Result<()> {
         executor: config.executor,
         dail_bin: config.dail_bin,
         priv_tool: config.priv_tool,
+        home_dir: config.home_dir,
     })
     .await
 }

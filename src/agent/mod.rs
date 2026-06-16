@@ -19,6 +19,9 @@ pub struct AgentConfig {
     pub executor: ExecutorKind,
     pub dail_bin: Option<String>,
     pub priv_tool: Option<String>,
+    /// HOME directory for exec: steps. Set this when the agent runs as a
+    /// service user with a non-existent home (e.g. /nonexistent on FreeBSD).
+    pub home_dir: Option<String>,
 }
 
 pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
@@ -196,6 +199,7 @@ async fn do_execute(
             let executor_kind = cfg.executor;
             let dail_bin = cfg.dail_bin.clone();
             let priv_tool = cfg.priv_tool.clone();
+            let home_dir = cfg.home_dir.clone();
 
             let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(256);
 
@@ -227,6 +231,7 @@ async fn do_execute(
                     run_file: &run_file,
                     workspace: &workspace,
                     env,
+                    home_dir,
                 };
                 let executor: Box<dyn Executor> = if is_host_exec {
                     Box::new(HostExecutor)
