@@ -103,6 +103,13 @@ else
     echo "  ${AGENT_CFG_DST} (kept existing)"
 fi
 
+# Both configs hold secrets (webhook_secret, github_token, cfgy_token):
+# readable by the service user only.
+for cfg in "${SERVER_CFG_DST}" "${AGENT_CFG_DST}"; do
+    doas chown flowz:flowz "${cfg}"
+    doas chmod 600 "${cfg}"
+done
+
 echo "  /etc/rc.conf"
 
 echo ""
