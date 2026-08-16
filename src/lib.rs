@@ -3,6 +3,7 @@ pub mod cli;
 pub mod executor;
 pub mod model;
 pub mod pipeline;
+pub mod secrets;
 pub mod server;
 pub mod store;
 pub mod webhook;

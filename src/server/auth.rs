@@ -83,7 +83,11 @@ pub struct SessionClaims {
     pub iat: i64,
 }
 
-pub fn create_session_token(secret: &str, sub: &str, email: Option<&str>) -> anyhow::Result<String> {
+pub fn create_session_token(
+    secret: &str,
+    sub: &str,
+    email: Option<&str>,
+) -> anyhow::Result<String> {
     let now = Utc::now();
     let claims = SessionClaims {
         sub: sub.to_string(),
@@ -282,11 +286,10 @@ pub async fn callback(
         return error_redirect("provider returned no subject", secure);
     }
 
-    let session_token =
-        match create_session_token(&state.jwt_secret, &sub, email.as_deref()) {
-            Ok(t) => t,
-            Err(e) => return error_redirect(&format!("session error: {e}"), secure),
-        };
+    let session_token = match create_session_token(&state.jwt_secret, &sub, email.as_deref()) {
+        Ok(t) => t,
+        Err(e) => return error_redirect(&format!("session error: {e}"), secure),
+    };
 
     let mut out = HeaderMap::new();
     append_cookie(
@@ -473,10 +476,7 @@ fn error_redirect(message: &str, secure: bool) -> Response {
     append_cookie(&mut headers, &clear_cookie(NEXT_COOKIE, secure));
     (
         headers,
-        Redirect::temporary(&format!(
-            "/?auth_error={}",
-            urlencoding::encode(message)
-        )),
+        Redirect::temporary(&format!("/?auth_error={}", urlencoding::encode(message))),
     )
         .into_response()
 }

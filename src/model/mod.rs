@@ -8,7 +8,18 @@ pub struct PipelineFile {
     pub triggers: Vec<Trigger>,
     #[serde(default)]
     pub env: IndexMap<String, String>,
+    pub secrets: Option<SecretsConfig>,
     pub steps: IndexMap<String, Step>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecretsConfig {
+    pub provider: String,
+    pub project: String,
+    /// branch -> configuration. Fail-closed: a branch without an entry gets
+    /// no secrets at all.
+    #[serde(default)]
+    pub configurations: IndexMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,6 +39,8 @@ pub struct Step {
     pub only: Option<Only>,
     #[serde(default)]
     pub env: IndexMap<String, String>,
+    /// Override the branch->configuration mapping for this step.
+    pub secrets: Option<String>,
     pub timeout: Option<String>,
     #[serde(default)]
     pub artifacts: Vec<String>,

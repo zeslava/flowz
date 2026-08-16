@@ -193,11 +193,50 @@ fn sanitize_jail_name(s: &str) -> String {
         .collect()
 }
 
+/// Env is handed to dail through a 0600 file, not `-e KEY=VALUE`: argv is
+/// world-readable in `ps` and steps may carry secrets.
+struct EnvFile {
+    path: std::path::PathBuf,
+}
+
+impl EnvFile {
+    fn write(run_id: &str, step_name: &str, env: &[(String, String)]) -> Result<Self> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "flowz-env-{}-{}",
+            &run_id[..run_id.len().min(8)],
+            sanitize_jail_name(step_name)
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        for (k, v) in env {
+            if v.contains('\n') {
+                anyhow::bail!("env value for '{k}' contains a newline, which dail cannot carry");
+            }
+            writeln!(file, "{k}={v}")?;
+        }
+        Ok(EnvFile { path })
+    }
+}
+
+impl Drop for EnvFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn build_dail_command(
     priv_tool: &str,
     dail_bin: &str,
     jail_name: &str,
     workspace_mount: &str,
+    env_file: &Path,
     ctx: &StepContext,
 ) -> std::process::Command {
     // dail requires root — always run via the privilege escalation tool
@@ -217,8 +256,8 @@ fn build_dail_command(
         .arg("--wait")
         .current_dir(ctx.workspace);
 
-    for (k, v) in &ctx.env {
-        cmd.arg("-e").arg(format!("{k}={v}"));
+    if !ctx.env.is_empty() {
+        cmd.arg("--env-file").arg(env_file);
     }
 
     cmd
@@ -253,11 +292,14 @@ impl Executor for DailExecutor {
             jail_name: jail_name.clone(),
         };
 
+        let env_file = EnvFile::write(ctx.run_id, ctx.step_name, &ctx.env)?;
+
         let mut cmd = build_dail_command(
             &self.priv_tool,
             &self.dail_bin,
             &jail_name,
             &self.workspace_mount,
+            &env_file.path,
             ctx,
         );
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -306,12 +348,14 @@ mod tests {
             run_file: "ci/build.dail",
             workspace: Path::new("/tmp/workspace"),
             env: vec![("FOO".to_string(), "bar".to_string())],
+            home_dir: None,
         };
         let cmd = build_dail_command(
             "doas",
             "/usr/local/bin/dail",
             "flowz-abc12345-build",
             "/workspace",
+            Path::new("/tmp/flowz-env-abc12345-build"),
             &ctx,
         );
         assert_eq!(cmd.get_program(), "doas");
@@ -323,8 +367,39 @@ mod tests {
         assert!(args.contains(&std::ffi::OsStr::new("flowz-abc12345-build")));
         assert!(args.contains(&std::ffi::OsStr::new("--wait")));
         assert!(args.contains(&std::ffi::OsStr::new("--rm")));
-        assert!(args.contains(&std::ffi::OsStr::new("-e")));
-        assert!(args.contains(&std::ffi::OsStr::new("FOO=bar")));
+        assert!(args.contains(&std::ffi::OsStr::new("--env-file")));
+        // secrets must never reach argv
+        assert!(!args.contains(&std::ffi::OsStr::new("FOO=bar")));
+    }
+
+    #[test]
+    fn env_file_is_private_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = {
+            let env_file = EnvFile::write(
+                "abc12345-def",
+                "build",
+                &[("TOKEN".to_string(), "a=b=c".to_string())],
+            )
+            .unwrap();
+            let mode = std::fs::metadata(&env_file.path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+            assert_eq!(
+                std::fs::read_to_string(&env_file.path).unwrap(),
+                "TOKEN=a=b=c\n"
+            );
+            env_file.path.clone()
+        };
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn env_file_rejects_newlines() {
+        assert!(EnvFile::write("abc", "step", &[("K".into(), "a\nb".into())]).is_err());
     }
 
     #[test]

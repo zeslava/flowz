@@ -46,6 +46,7 @@ Single flat crate (`flowz`) with one binary (`src/main.rs`) exposing subcommands
 | `src/model/` | Domain types: `Run`, `StepRecord`, `RunStatus`, `StepStatus` |
 | `src/pipeline/` | `.flowz.yaml` parser + validator, `Executor` port trait |
 | `src/executor/` | `StubExecutor` (Linux dev); `DailExecutor` deferred to FreeBSD |
+| `src/secrets/` | `SecretsProvider` port + `CfgyProvider` (shells out to `cfgy list`), log `Masker` |
 | `src/webhook/` | GitHub HMAC-SHA256 verification + push event parsing |
 | `src/store/` | SQLite adapter via `sqlx` (runtime queries, no compile-time macros) |
 | `src/server/` | axum HTTP server, UI routes (`GET /`, `GET /runs/{id}`), API |
@@ -55,6 +56,12 @@ Single flat crate (`flowz`) with one binary (`src/main.rs`) exposing subcommands
 **Agent ↔ server protocol:** long-poll `GET /api/jobs/poll` for job claim;
 `POST /api/runs/{id}/steps/{step}/logs` for log ingest;
 `POST /api/runs/{id}/status` for completion.
+
+**Secrets:** resolved on the agent host before the run's first step (fail fast on
+typos), cached per configuration, injected via `StepContext.env`, masked in logs.
+Fail-closed on unmapped branches. cfgy exit codes: `3` = configuration not found,
+`4` = project not found. `DailExecutor` passes env through a 0600 `--env-file`,
+never `-e KEY=VALUE` (argv is visible in `ps`).
 
 **GitHub commit status:** agent posts `success|failure` to GitHub Statuses API after each run.
 Token flows from `flowz-server.yaml` → job payload → agent.

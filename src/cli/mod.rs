@@ -163,6 +163,15 @@ struct AgentFileConfig {
     /// user with a non-existent home (e.g. /nonexistent on FreeBSD).
     #[serde(default)]
     home_dir: Option<String>,
+    /// Path to the cfgy binary used to resolve `secrets:` (default: `cfgy` in PATH).
+    #[serde(default)]
+    cfgy_bin: Option<String>,
+    /// cfgy server and token. When unset, cfgy falls back to the agent's own
+    /// environment (CFGY_SERVER_URL / CFGY_TOKEN) and ~/.cfgy/config.yaml.
+    #[serde(default)]
+    cfgy_server_url: Option<String>,
+    #[serde(default)]
+    cfgy_token: Option<String>,
 }
 
 fn default_agent_name() -> String {
@@ -199,6 +208,9 @@ async fn run_agent() -> Result<()> {
             dail_bin: None,
             priv_tool: None,
             home_dir: None,
+            cfgy_bin: None,
+            cfgy_server_url: None,
+            cfgy_token: None,
         }
     };
 
@@ -230,6 +242,9 @@ async fn run_agent() -> Result<()> {
         dail_bin: config.dail_bin,
         priv_tool: config.priv_tool,
         home_dir: config.home_dir,
+        cfgy_bin: config.cfgy_bin,
+        cfgy_server_url: config.cfgy_server_url,
+        cfgy_token: config.cfgy_token,
     })
     .await
 }

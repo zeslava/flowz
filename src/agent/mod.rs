@@ -4,12 +4,15 @@ pub use workspace::WorkspaceBackend;
 
 use crate::{
     executor::{Executor, ExecutorKind, HostExecutor, StepContext},
-    model::{Run, RunStatus, StepStatus},
+    model::{PipelineFile, Run, RunStatus, StepStatus},
     pipeline,
+    secrets::{CfgyProvider, Masker, SecretsProvider},
 };
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use reqwest::Client;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub struct AgentConfig {
@@ -22,6 +25,9 @@ pub struct AgentConfig {
     /// HOME directory for exec: steps. Set this when the agent runs as a
     /// service user with a non-existent home (e.g. /nonexistent on FreeBSD).
     pub home_dir: Option<String>,
+    pub cfgy_bin: Option<String>,
+    pub cfgy_server_url: Option<String>,
+    pub cfgy_token: Option<String>,
 }
 
 pub async fn run_loop(cfg: AgentConfig) -> Result<()> {
@@ -104,7 +110,11 @@ async fn execute_run(
         &run.id,
         "agent",
         vec![
-            format!("cloned {repo} @ {commit}", repo = run.repo, commit = &run.commit[..run.commit.len().min(12)]),
+            format!(
+                "cloned {repo} @ {commit}",
+                repo = run.repo,
+                commit = &run.commit[..run.commit.len().min(12)]
+            ),
             format!("workspace: {}", workspace.path.display()),
         ],
     )
@@ -136,31 +146,85 @@ async fn do_execute(
     workspace: &Path,
     github_token: Option<&str>,
 ) -> Result<()> {
-
     // parse pipeline
     let yaml_path = workspace.join(".flowz.yaml");
     let yaml = std::fs::read_to_string(&yaml_path)
         .with_context(|| format!("read {}", yaml_path.display()))?;
     let pipeline = pipeline::parse(&yaml).context("parse .flowz.yaml")?;
 
+    let mut resolver = pipeline.secrets.as_ref().map(|sc| SecretsResolver {
+        provider: Box::new(CfgyProvider::new(
+            cfg.cfgy_bin.clone(),
+            cfg.cfgy_server_url.clone(),
+            cfg.cfgy_token.clone(),
+        )),
+        project: sc.project.clone(),
+        cache: HashMap::new(),
+        masker: Masker::default(),
+    });
+
+    // Resolve every configuration the run will need up front: a typo in the
+    // mapping should fail in seconds, not after a six-minute build.
+    if let Some(resolver) = resolver.as_mut() {
+        for (step_name, step) in &pipeline.steps {
+            if skipped_by_branch(step, &run.branch) {
+                continue;
+            }
+            let Some(configuration) =
+                configuration_for(&pipeline, step.secrets.as_deref(), &run.branch)
+            else {
+                continue;
+            };
+            if let Err(e) = resolver.load(&configuration) {
+                // Create the step record first, so the failure is visible in
+                // the UI attached to the step that could not get its secrets.
+                post_step_status(
+                    client,
+                    &cfg.server_url,
+                    &run.id,
+                    step_name,
+                    StepStatus::Running,
+                )
+                .await;
+                post_logs(
+                    client,
+                    &cfg.server_url,
+                    &run.id,
+                    step_name,
+                    vec![format!("✗ {e:#}")],
+                )
+                .await;
+                post_step_status(
+                    client,
+                    &cfg.server_url,
+                    &run.id,
+                    step_name,
+                    StepStatus::Failure,
+                )
+                .await;
+                post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
+                if let Some(token) = github_token {
+                    post_commit_status(client, token, &run.repo, &run.commit, false).await;
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let mut overall_success = true;
 
     for (step_name, step) in &pipeline.steps {
         // honor only.branch filter
-        if let Some(only) = &step.only {
-            if let Some(branch_filter) = &only.branch {
-                if branch_filter != &run.branch {
-                    post_step_status(
-                        client,
-                        &cfg.server_url,
-                        &run.id,
-                        step_name,
-                        StepStatus::Skipped,
-                    )
-                    .await;
-                    continue;
-                }
-            }
+        if skipped_by_branch(step, &run.branch) {
+            post_step_status(
+                client,
+                &cfg.server_url,
+                &run.id,
+                step_name,
+                StepStatus::Skipped,
+            )
+            .await;
+            continue;
         }
 
         post_step_status(
@@ -172,12 +236,26 @@ async fn do_execute(
         )
         .await;
 
-        let env: Vec<(String, String)> = pipeline
-            .env
-            .iter()
-            .chain(step.env.iter())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        // Priority: pipeline.env -> secrets -> step.env. What is written
+        // explicitly in the YAML wins over what the provider returned.
+        let mut merged: IndexMap<String, String> = pipeline.env.clone();
+        if let Some(resolver) = resolver.as_mut() {
+            if let Some(configuration) =
+                configuration_for(&pipeline, step.secrets.as_deref(), &run.branch)
+            {
+                // Already fetched during preflight — cannot fail here.
+                for (k, v) in resolver.load(&configuration)? {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        merged.extend(step.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let env: Vec<(String, String)> = merged.into_iter().collect();
+
+        let masker = resolver
+            .as_ref()
+            .map(|r| r.masker.clone())
+            .unwrap_or_default();
 
         // Determine script path and executor based on step type.
         let (script, is_host_exec) = match (&step.run, &step.exec) {
@@ -209,9 +287,9 @@ async fn do_execute(
             let step_name_consumer = step_name.to_string();
             let consumer = tokio::spawn(async move {
                 while let Some(line) = log_rx.recv().await {
-                    let mut batch = vec![line];
+                    let mut batch = vec![masker.mask(line)];
                     while let Ok(line) = log_rx.try_recv() {
-                        batch.push(line);
+                        batch.push(masker.mask(line));
                     }
                     post_logs(
                         &client_consumer,
@@ -315,6 +393,53 @@ async fn do_execute(
     }
 
     Ok(())
+}
+
+fn skipped_by_branch(step: &crate::model::Step, branch: &str) -> bool {
+    step.only
+        .as_ref()
+        .and_then(|only| only.branch.as_deref())
+        .is_some_and(|filter| filter != branch)
+}
+
+/// Which provider configuration a step runs against. An explicit `secrets:`
+/// on the step wins over the branch mapping; a branch with no mapping gets no
+/// secrets at all (fail-closed — a feature branch must not reach prod values).
+fn configuration_for(
+    pipeline: &PipelineFile,
+    step_secrets: Option<&str>,
+    branch: &str,
+) -> Option<String> {
+    let secrets = pipeline.secrets.as_ref()?;
+    match step_secrets {
+        Some(explicit) => Some(explicit.to_string()),
+        None => secrets.configurations.get(branch).cloned(),
+    }
+}
+
+/// Resolves configurations through the provider once each and remembers the
+/// values, so the preflight check and the steps share the same fetch.
+struct SecretsResolver {
+    provider: Box<dyn SecretsProvider>,
+    project: String,
+    cache: HashMap<String, Vec<(String, String)>>,
+    masker: Masker,
+}
+
+impl SecretsResolver {
+    fn load(&mut self, configuration: &str) -> Result<&[(String, String)]> {
+        if !self.cache.contains_key(configuration) {
+            let pairs = self
+                .provider
+                .fetch(&self.project, configuration)
+                .map_err(|e| anyhow::anyhow!("secrets: {e}"))?;
+            for (_, value) in &pairs {
+                self.masker.add(value);
+            }
+            self.cache.insert(configuration.to_string(), pairs);
+        }
+        Ok(&self.cache[configuration])
+    }
 }
 
 async fn post_logs(

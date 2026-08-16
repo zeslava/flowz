@@ -25,7 +25,9 @@ pub enum WorkspaceBackend {
     Dir(PathBuf),
     /// Parent dataset that holds per-repo datasets and per-run clones,
     /// e.g. `zroot/flowz/ws`.
-    Zfs { pool: String },
+    Zfs {
+        pool: String,
+    },
 }
 
 /// A provisioned workspace ready for the executor.
@@ -36,7 +38,9 @@ pub struct Workspace {
 }
 
 enum Cleanup {
-    Dir { priv_tool: String },
+    Dir {
+        priv_tool: String,
+    },
     Zfs {
         priv_tool: String,
         clone_ds: String,
@@ -104,7 +108,12 @@ fn cleanup_dir(run_id: &str, path: &Path, priv_tool: &str) {
         Err(e) => tracing::warn!(run_id, "cleanup workspace: {e}"),
     }
     // Privileged fallback for root-owned files left by a dail jail.
-    match Command::new(priv_tool).arg("rm").arg("-rf").arg(path).status() {
+    match Command::new(priv_tool)
+        .arg("rm")
+        .arg("-rf")
+        .arg(path)
+        .status()
+    {
         Ok(s) if s.success() => {}
         Ok(s) => tracing::warn!(run_id, "cleanup workspace via {priv_tool}: exit {s}"),
         Err(e) => tracing::warn!(run_id, "cleanup workspace via {priv_tool}: {e}"),
@@ -188,13 +197,12 @@ fn ensure_repo_dataset(priv_tool: &str, repo_ds: &str, run: &Run) -> Result<()> 
     git(&["-C", &mp, "fetch", "--all", "--prune"]).context("git fetch")?;
     // If commit is a real SHA use it directly; otherwise (e.g. "HEAD" from the
     // build button) reset to the remote tracking branch so we get latest code.
-    let checkout_ref = if run.commit.len() == 40
-        && run.commit.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        run.commit.clone()
-    } else {
-        format!("origin/{}", run.branch)
-    };
+    let checkout_ref =
+        if run.commit.len() == 40 && run.commit.chars().all(|c| c.is_ascii_hexdigit()) {
+            run.commit.clone()
+        } else {
+            format!("origin/{}", run.branch)
+        };
     git(&["-C", &mp, "checkout", "-f", &checkout_ref]).context("git checkout")?;
     Ok(())
 }

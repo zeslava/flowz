@@ -18,6 +18,12 @@ pub enum PipelineError {
     MissingAction(String),
     #[error("step '{0}': cannot specify both 'run' and 'exec'")]
     AmbiguousAction(String),
+    #[error("unsupported secrets provider '{0}', expected 'cfgy'")]
+    UnsupportedSecretsProvider(String),
+    #[error("secrets: project must not be empty")]
+    EmptySecretsProject,
+    #[error("step '{0}': 'secrets' set but no top-level 'secrets' section")]
+    SecretsWithoutProvider(String),
     #[error("yaml parse error: {0}")]
     Parse(#[from] serde_yaml_ng::Error),
 }
@@ -31,6 +37,17 @@ pub fn parse(yaml: &str) -> Result<PipelineFile, PipelineError> {
 pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
     if pf.version != 1 {
         return Err(PipelineError::UnsupportedVersion(pf.version));
+    }
+
+    if let Some(secrets) = &pf.secrets {
+        if secrets.provider != "cfgy" {
+            return Err(PipelineError::UnsupportedSecretsProvider(
+                secrets.provider.clone(),
+            ));
+        }
+        if secrets.project.trim().is_empty() {
+            return Err(PipelineError::EmptySecretsProject);
+        }
     }
 
     let step_names: HashSet<&str> = pf.steps.keys().map(String::as_str).collect();
@@ -60,6 +77,10 @@ pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
                     path: path.clone(),
                 });
             }
+        }
+
+        if step.secrets.is_some() && pf.secrets.is_none() {
+            return Err(PipelineError::SecretsWithoutProvider(name.clone()));
         }
 
         for dep in &step.needs {
@@ -239,9 +260,63 @@ steps:
   bad:
     needs: []
 "#;
+        assert!(matches!(parse(yaml), Err(PipelineError::MissingAction(_))));
+    }
+
+    #[test]
+    fn parses_secrets_section() {
+        let yaml = r#"
+version: 1
+secrets:
+  provider: cfgy
+  project: teka
+  configurations:
+    main: prod
+    develop: staging
+steps:
+  test:
+    run: ci/test.sh
+    secrets: dev
+  deploy:
+    exec: ci/deploy.sh
+"#;
+        let pf = parse(yaml).unwrap();
+        let secrets = pf.secrets.as_ref().unwrap();
+        assert_eq!(secrets.project, "teka");
+        assert_eq!(secrets.configurations["main"], "prod");
+        assert_eq!(pf.steps["test"].secrets.as_deref(), Some("dev"));
+        assert!(pf.steps["deploy"].secrets.is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_secrets_provider() {
+        let yaml = r#"
+version: 1
+secrets:
+  provider: vault
+  project: teka
+steps:
+  test:
+    run: ci/test.sh
+"#;
         assert!(matches!(
             parse(yaml),
-            Err(PipelineError::MissingAction(_))
+            Err(PipelineError::UnsupportedSecretsProvider(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_step_secrets_without_section() {
+        let yaml = r#"
+version: 1
+steps:
+  test:
+    run: ci/test.sh
+    secrets: dev
+"#;
+        assert!(matches!(
+            parse(yaml),
+            Err(PipelineError::SecretsWithoutProvider(_))
         ));
     }
 
