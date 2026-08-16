@@ -60,6 +60,14 @@ tasks:
           -H "X-Hub-Signature-256: $SIG" \
           -d '{{.BODY}}' | jq .
 
+  install:
+    desc: Build and install flowz on a FreeBSD host (server + agent, rc.d, configs)
+    preconditions:
+      - sh: '[ "$(uname -s)" = FreeBSD ]'
+        msg: "install-freebsd.sh only runs on FreeBSD"
+    cmds:
+      - sh deploy/install-freebsd.sh
+
   runs:
     desc: List runs via API
     cmds:
