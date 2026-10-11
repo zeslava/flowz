@@ -1,5 +1,6 @@
 use crate::model::PipelineFile;
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,6 +25,12 @@ pub enum PipelineError {
     EmptySecretsProject,
     #[error("step '{0}': 'secrets' set but no top-level 'secrets' section")]
     SecretsWithoutProvider(String),
+    #[error("cache '{0}': name must match [A-Za-z0-9_-]+")]
+    InvalidCacheName(String),
+    #[error("cache '{name}': invalid path '{path}'")]
+    InvalidCachePath { name: String, path: String },
+    #[error("cache '{0}': path is already used by another cache")]
+    DuplicateCachePath(String),
     #[error("yaml parse error: {0}")]
     Parse(#[from] serde_yaml_ng::Error),
 }
@@ -49,6 +56,8 @@ pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
             return Err(PipelineError::EmptySecretsProject);
         }
     }
+
+    validate_cache(pf)?;
 
     let step_names: HashSet<&str> = pf.steps.keys().map(String::as_str).collect();
 
@@ -92,6 +101,55 @@ pub fn validate(pf: &PipelineFile) -> Result<(), PipelineError> {
 
     detect_cycle(pf)?;
 
+    Ok(())
+}
+
+/// Canonical form of a cache path: no leading `./`, no trailing `/`.
+pub fn normalize_cache_path(path: &str) -> &str {
+    let path = path.trim();
+    let path = path.strip_prefix("./").unwrap_or(path);
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() && path.starts_with('/') {
+        "/"
+    } else {
+        trimmed
+    }
+}
+
+fn validate_cache(pf: &PipelineFile) -> Result<(), PipelineError> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (name, path) in &pf.cache {
+        let valid_name = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+        if !valid_name {
+            return Err(PipelineError::InvalidCacheName(name.clone()));
+        }
+
+        let norm = normalize_cache_path(path);
+        let has_parent = Path::new(norm)
+            .components()
+            .any(|c| matches!(c, Component::ParentDir));
+        // Absolute paths under /workspace would shadow the workspace mount;
+        // those belong in the relative form.
+        let bad = norm.is_empty()
+            || norm == "."
+            || norm == "/"
+            || norm == "/workspace"
+            || norm.starts_with("/workspace/")
+            || norm.contains(':')
+            || has_parent;
+        if bad {
+            return Err(PipelineError::InvalidCachePath {
+                name: name.clone(),
+                path: path.clone(),
+            });
+        }
+        if !seen.insert(norm) {
+            return Err(PipelineError::DuplicateCachePath(name.clone()));
+        }
+    }
     Ok(())
 }
 
@@ -318,6 +376,63 @@ steps:
             parse(yaml),
             Err(PipelineError::SecretsWithoutProvider(_))
         ));
+    }
+
+    fn with_cache(entries: &str) -> String {
+        format!("version: 1\ncache:\n{entries}\nsteps:\n  build:\n    run: ci/build.dail\n")
+    }
+
+    #[test]
+    fn parses_cache_section() {
+        let pf = parse(&with_cache("  target: target\n  cargo: /root/.cargo")).unwrap();
+        assert_eq!(pf.cache["target"], "target");
+        assert_eq!(pf.cache["cargo"], "/root/.cargo");
+    }
+
+    #[test]
+    fn rejects_bad_cache_name() {
+        assert!(matches!(
+            parse(&with_cache("  \"a/b\": target")),
+            Err(PipelineError::InvalidCacheName(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_cache_paths() {
+        for path in [
+            "\"\"",
+            ".",
+            "./",
+            "/",
+            "/workspace",
+            "/workspace/x",
+            "../x",
+            "a/../../b",
+            "a:b",
+        ] {
+            assert!(
+                matches!(
+                    parse(&with_cache(&format!("  c: {path}"))),
+                    Err(PipelineError::InvalidCachePath { .. })
+                ),
+                "path {path} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_cache_path() {
+        assert!(matches!(
+            parse(&with_cache("  a: target\n  b: ./target/")),
+            Err(PipelineError::DuplicateCachePath(_))
+        ));
+    }
+
+    #[test]
+    fn normalizes_cache_path() {
+        assert_eq!(normalize_cache_path("./target/"), "target");
+        assert_eq!(normalize_cache_path("/root/.cargo/"), "/root/.cargo");
+        assert_eq!(normalize_cache_path("/"), "/");
     }
 
     #[test]

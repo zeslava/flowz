@@ -95,6 +95,26 @@ The agent needs a cfgy token — set `cfgy_token`/`cfgy_server_url` in
 `flowz-agent.yaml`, or let cfgy pick up `CFGY_TOKEN` / `CFGY_SERVER_URL` from
 the agent's environment.
 
+## Cache
+
+Nothing survives a run unless declared. `cache:` names paths that do:
+
+```yaml
+cache:
+  target: target          # relative -> inside the workspace
+  cargo: /root/.cargo     # absolute -> inside the step jail
+```
+
+- Each cache is a ZFS dataset `<pool>/cache/<repo>/<name>`. A run works in a
+  clone of its `@latest` snapshot, mounted into every `run:` step; `exec:`
+  steps get no caches.
+- The clone becomes the new `@latest` only if the whole run succeeds — a
+  failed run never poisons the cache.
+- The name is the key: change the path and the cache is kept, rename it and
+  it starts empty. To reset a cache: `zfs destroy -r <pool>/cache/<repo>/<name>`.
+- ZFS workspace backend only; the dir backend ignores `cache:`. There is no
+  size limit or GC yet.
+
 ## Configuration
 
 **flowz-server.yaml**

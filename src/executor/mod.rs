@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct StepContext<'a> {
     pub run_id: &'a str,
@@ -11,6 +11,9 @@ pub struct StepContext<'a> {
     /// Override HOME for exec: steps (used when agent runs as a service user
     /// with a non-existent home directory).
     pub home_dir: Option<String>,
+    /// Extra (host path, step path) mounts, e.g. caches. A relative step path
+    /// is resolved against the workspace mount. Only `DailExecutor` honours it.
+    pub mounts: Vec<(PathBuf, String)>,
 }
 
 pub struct StepOutcome {
@@ -256,6 +259,17 @@ fn build_dail_command(
         .arg("--wait")
         .current_dir(ctx.workspace);
 
+    // dail mounts in argv order, so these land on top of the workspace mount.
+    for (host, path) in &ctx.mounts {
+        let target = if path.starts_with('/') {
+            path.clone()
+        } else {
+            format!("{workspace_mount}/{path}")
+        };
+        cmd.arg("--mount")
+            .arg(format!("{}:{target}", host.display()));
+    }
+
     if !ctx.env.is_empty() {
         cmd.arg("--env-file").arg(env_file);
     }
@@ -349,6 +363,13 @@ mod tests {
             workspace: Path::new("/tmp/workspace"),
             env: vec![("FOO".to_string(), "bar".to_string())],
             home_dir: None,
+            mounts: vec![
+                (PathBuf::from("/zroot/cache/target.run-1"), "target".into()),
+                (
+                    PathBuf::from("/zroot/cache/cargo.run-1"),
+                    "/root/.cargo".into(),
+                ),
+            ],
         };
         let cmd = build_dail_command(
             "doas",
@@ -370,6 +391,21 @@ mod tests {
         assert!(args.contains(&std::ffi::OsStr::new("--env-file")));
         // secrets must never reach argv
         assert!(!args.contains(&std::ffi::OsStr::new("FOO=bar")));
+
+        // workspace mount first, caches after it, relative paths under it
+        let mounts: Vec<_> = args
+            .windows(2)
+            .filter(|w| w[0] == "--mount")
+            .map(|w| w[1].to_str().unwrap())
+            .collect();
+        assert_eq!(
+            mounts,
+            [
+                "/tmp/workspace:/workspace",
+                "/zroot/cache/target.run-1:/workspace/target",
+                "/zroot/cache/cargo.run-1:/root/.cargo",
+            ]
+        );
     }
 
     #[test]

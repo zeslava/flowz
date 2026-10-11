@@ -63,6 +63,11 @@ Fail-closed on unmapped branches. cfgy exit codes: `3` = configuration not found
 `4` = project not found. `DailExecutor` passes env through a 0600 `--env-file`,
 never `-e KEY=VALUE` (argv is visible in `ps`).
 
+**Cache:** `cache:` in `.flowz.yaml` (name → path; relative = workspace,
+absolute = jail). ZFS-only: per-run clone of `<pool>/cache/<repo>/<name>@latest`,
+passed to dail as extra `--mount` after `/workspace`, `run:` steps only.
+Committed back (promote + rename) only if the whole run succeeds.
+
 **GitHub commit status:** agent posts `success|failure` to GitHub Statuses API after each run.
 Token flows from `flowz-server.yaml` → job payload → agent.
 

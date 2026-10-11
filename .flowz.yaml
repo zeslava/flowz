@@ -4,6 +4,10 @@ triggers:
   - on: push
     branches: [main]
 
+cache:
+  target: target
+  cargo: /root/.cargo
+
 steps:
   build:
     run: ci/build.dail

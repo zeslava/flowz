@@ -9,6 +9,10 @@ pub struct PipelineFile {
     #[serde(default)]
     pub env: IndexMap<String, String>,
     pub secrets: Option<SecretsConfig>,
+    /// name -> path persisted between runs. Relative paths are inside the
+    /// workspace, absolute ones inside the step jail. Applies to `run:` steps.
+    #[serde(default)]
+    pub cache: IndexMap<String, String>,
     pub steps: IndexMap<String, Step>,
 }
 

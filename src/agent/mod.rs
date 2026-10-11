@@ -88,7 +88,7 @@ async fn execute_run(
     } else {
         run
     };
-    let workspace = match workspace::prepare(&cfg.workspace, run, priv_tool) {
+    let mut workspace = match workspace::prepare(&cfg.workspace, run, priv_tool) {
         Ok(ws) => ws,
         Err(e) => {
             post_logs(
@@ -120,7 +120,7 @@ async fn execute_run(
     )
     .await;
 
-    let result = do_execute(client, cfg, run, &workspace.path, github_token).await;
+    let result = do_execute(client, cfg, run, &mut workspace, github_token).await;
 
     if let Err(ref e) = result {
         post_logs(
@@ -134,23 +134,43 @@ async fn execute_run(
         post_run_status(client, &cfg.server_url, &run.id, RunStatus::Failure).await;
     }
 
-    workspace.cleanup(&run.id);
+    workspace.finish(&run.id, matches!(result, Ok(true)));
 
-    result
+    result.map(|_| ())
 }
 
+/// Runs the pipeline and reports its status. `Ok(success)` is the run's
+/// outcome; `Err` is an infrastructure failure the caller still has to report.
 async fn do_execute(
     client: &Client,
     cfg: &AgentConfig,
     run: &Run,
-    workspace: &Path,
+    ws: &mut workspace::Workspace,
     github_token: Option<&str>,
-) -> Result<()> {
+) -> Result<bool> {
     // parse pipeline
-    let yaml_path = workspace.join(".flowz.yaml");
+    let yaml_path = ws.path.join(".flowz.yaml");
     let yaml = std::fs::read_to_string(&yaml_path)
         .with_context(|| format!("read {}", yaml_path.display()))?;
     let pipeline = pipeline::parse(&yaml).context("parse .flowz.yaml")?;
+
+    let mut cache_mounts: Vec<(PathBuf, String)> = Vec::new();
+    if !pipeline.cache.is_empty() {
+        let lines = match ws.attach_caches(&run.id, &pipeline.cache)? {
+            Some(caches) => caches
+                .into_iter()
+                .map(|c| {
+                    let state = if c.restored { "restored" } else { "empty" };
+                    let line = format!("cache: {} ({}) {state}", c.name, c.path);
+                    cache_mounts.push((c.host_path, c.path));
+                    line
+                })
+                .collect(),
+            None => vec!["cache: not supported by the dir workspace backend, ignored".to_string()],
+        };
+        post_logs(client, &cfg.server_url, &run.id, "agent", lines).await;
+    }
+    let workspace = ws.path.as_path();
 
     let mut resolver = pipeline.secrets.as_ref().map(|sc| SecretsResolver {
         provider: Box::new(CfgyProvider::new(
@@ -206,7 +226,7 @@ async fn do_execute(
                 if let Some(token) = github_token {
                     post_commit_status(client, token, &run.repo, &run.commit, false).await;
                 }
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -278,6 +298,12 @@ async fn do_execute(
             let dail_bin = cfg.dail_bin.clone();
             let priv_tool = cfg.priv_tool.clone();
             let home_dir = cfg.home_dir.clone();
+            // exec: steps run on the host and build nothing — no caches there.
+            let mounts = if is_host_exec {
+                Vec::new()
+            } else {
+                cache_mounts.clone()
+            };
 
             let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(256);
 
@@ -310,6 +336,7 @@ async fn do_execute(
                     workspace: &workspace,
                     env,
                     home_dir,
+                    mounts,
                 };
                 let executor: Box<dyn Executor> = if is_host_exec {
                     Box::new(HostExecutor)
@@ -392,7 +419,7 @@ async fn do_execute(
         post_commit_status(client, token, &run.repo, &run.commit, overall_success).await;
     }
 
-    Ok(())
+    Ok(overall_success)
 }
 
 fn skipped_by_branch(step: &crate::model::Step, branch: &str) -> bool {

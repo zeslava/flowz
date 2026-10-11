@@ -4,10 +4,14 @@
 //! - [`WorkspaceBackend::Dir`] — plain directory under `workspace_dir`, cloned by
 //!   the agent. Used for Linux/StubExecutor dev. Cleanup is `rm -rf` (with a
 //!   privileged fallback for root-owned files left by a dail jail).
-//! - [`WorkspaceBackend::Zfs`] — a per-repo "warm" dataset holds a full clone
-//!   plus build cache; each job runs in an instant `zfs clone` of a
+//! - [`WorkspaceBackend::Zfs`] — a per-repo "warm" dataset holds a full git
+//!   clone (so runs only fetch); each job runs in an instant `zfs clone` of a
 //!   snapshot of it. Cleanup is `zfs destroy`, so root-owned files inside the
 //!   jail are never a problem and the original repo dataset is untouched.
+//!
+//! Caches (`cache:` in `.flowz.yaml`) are ZFS-only: each one is a dataset
+//! under `<pool>/cache/<repo>/` whose `@latest` snapshot is cloned per run and
+//! committed back only if the run succeeds, so a broken build never poisons it.
 //!
 //! In the ZFS backend every filesystem operation runs as root through the
 //! privilege tool. The agent itself only ever *reads* the workspace (parse
@@ -15,10 +19,12 @@
 //! agent never needs write access.
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::model::Run;
+use crate::pipeline;
 
 #[derive(Clone)]
 pub enum WorkspaceBackend {
@@ -35,6 +41,7 @@ pub struct Workspace {
     /// Host path to run the job in (mountpoint of the ZFS clone, or the dir).
     pub path: PathBuf,
     cleanup: Cleanup,
+    caches: Vec<CacheClone>,
 }
 
 enum Cleanup {
@@ -45,7 +52,27 @@ enum Cleanup {
         priv_tool: String,
         clone_ds: String,
         snapshot: String,
+        /// Parent of this repo's cache datasets, e.g. `zroot/flowz/ws/cache/owner_repo`.
+        cache_root: String,
     },
+}
+
+/// A cache provisioned for a run, ready to be mounted into steps.
+pub struct CacheMount {
+    pub name: String,
+    /// Path as declared in `.flowz.yaml` (normalized).
+    pub path: String,
+    pub host_path: PathBuf,
+    /// False when the cache started empty (first run, or never committed).
+    pub restored: bool,
+}
+
+/// Per-run writable clone of `base@latest`. The run works in `clone`; on
+/// success the clone replaces `base`, on failure it is destroyed.
+struct CacheClone {
+    base: String,
+    clone: String,
+    restored: bool,
 }
 
 /// Provision a workspace for `run`. `priv_tool` is the privilege escalation
@@ -58,16 +85,82 @@ pub fn prepare(backend: &WorkspaceBackend, run: &Run, priv_tool: &str) -> Result
 }
 
 impl Workspace {
-    /// Tear down the workspace. Best-effort: failures are logged, not returned,
-    /// since the job result has already been reported.
-    pub fn cleanup(self, run_id: &str) {
+    /// Provision per-run clones of the pipeline's caches (`name -> path`).
+    /// Only the ZFS backend supports caches; the dir backend returns `None`.
+    pub fn attach_caches(
+        &mut self,
+        run_id: &str,
+        caches: &IndexMap<String, String>,
+    ) -> Result<Option<Vec<CacheMount>>> {
+        let Cleanup::Zfs {
+            priv_tool,
+            cache_root,
+            ..
+        } = &self.cleanup
+        else {
+            return Ok(None);
+        };
+
+        if !caches.is_empty() {
+            zfs(priv_tool, &["create", "-p", cache_root]).context("zfs create cache root")?;
+        }
+
+        let mut mounts = Vec::with_capacity(caches.len());
+        for (name, path) in caches {
+            // '.' is not allowed in cache names, so these never collide with a base.
+            let base = format!("{cache_root}/{name}");
+            let clone = format!("{cache_root}/{name}.run-{run_id}");
+            let latest = format!("{base}@latest");
+
+            let restored = dataset_exists(priv_tool, &latest);
+            if restored {
+                zfs(priv_tool, &["clone", &latest, &clone])
+                    .with_context(|| format!("cache '{name}': zfs clone"))?;
+            } else {
+                zfs(priv_tool, &["create", &clone])
+                    .with_context(|| format!("cache '{name}': zfs create"))?;
+            }
+            self.caches.push(CacheClone {
+                base,
+                clone: clone.clone(),
+                restored,
+            });
+
+            let host_path = mountpoint(priv_tool, &clone)
+                .with_context(|| format!("cache '{name}': resolve mountpoint"))?;
+            mounts.push(CacheMount {
+                name: name.clone(),
+                path: pipeline::normalize_cache_path(path).to_string(),
+                host_path,
+                restored,
+            });
+        }
+        Ok(Some(mounts))
+    }
+
+    /// Tear down the workspace; on success, commit caches as the new
+    /// `@latest`, otherwise discard them. Best-effort: failures are logged,
+    /// not returned, since the job result has already been reported.
+    pub fn finish(self, run_id: &str, success: bool) {
         match self.cleanup {
             Cleanup::Dir { priv_tool } => cleanup_dir(run_id, &self.path, &priv_tool),
             Cleanup::Zfs {
                 priv_tool,
                 clone_ds,
                 snapshot,
-            } => cleanup_zfs(run_id, &priv_tool, &clone_ds, &snapshot),
+                ..
+            } => {
+                for cache in &self.caches {
+                    if success {
+                        if let Err(e) = commit_cache(&priv_tool, run_id, cache) {
+                            tracing::warn!(run_id, "cache commit {}: {e:#}", cache.clone);
+                        }
+                    } else if let Err(e) = zfs(&priv_tool, &["destroy", "-r", &cache.clone]) {
+                        tracing::warn!(run_id, "cache discard {}: {e:#}", cache.clone);
+                    }
+                }
+                cleanup_zfs(run_id, &priv_tool, &clone_ds, &snapshot);
+            }
         }
     }
 }
@@ -93,6 +186,7 @@ fn prepare_dir(dir: &Path, run: &Run, priv_tool: &str) -> Result<Workspace> {
         cleanup: Cleanup::Dir {
             priv_tool: priv_tool.to_string(),
         },
+        caches: Vec::new(),
     })
 }
 
@@ -147,6 +241,8 @@ fn prepare_zfs(pool: &str, priv_tool: &str, run: &Run) -> Result<Workspace> {
     let slug = sanitize(&run.repo);
     let repo_ds = format!("{pool}/{slug}");
     let clone_ds = format!("{pool}/run-{}", run.id);
+    // Not under repo_ds: a child dataset would show up inside the checkout.
+    let cache_root = format!("{pool}/cache/{slug}");
     let snapshot = format!("{repo_ds}@run-{}", run.id);
 
     ensure_repo_dataset(priv_tool, &repo_ds, run)?;
@@ -172,12 +268,14 @@ fn prepare_zfs(pool: &str, priv_tool: &str, run: &Run) -> Result<Workspace> {
             priv_tool: priv_tool.to_string(),
             clone_ds,
             snapshot,
+            cache_root,
         },
+        caches: Vec::new(),
     })
 }
 
 /// Create the per-repo dataset and clone the repo on first use; otherwise fetch
-/// and check out the target commit, preserving untracked files (the build cache).
+/// and check out the target commit.
 fn ensure_repo_dataset(priv_tool: &str, repo_ds: &str, run: &Run) -> Result<()> {
     if !dataset_exists(priv_tool, repo_ds) {
         zfs(priv_tool, &["create", "-p", repo_ds]).context("zfs create repo dataset")?;
@@ -215,6 +313,39 @@ fn cleanup_zfs(run_id: &str, priv_tool: &str, clone_ds: &str, snapshot: &str) {
     if let Err(e) = zfs(priv_tool, &["destroy", snapshot]) {
         tracing::warn!(run_id, "cleanup: zfs destroy {snapshot}: {e:#}");
     }
+}
+
+/// Make the run's clone the new cache base, snapshotted as `@latest`.
+///
+/// After `promote` the clone owns `@latest` and the old base becomes its
+/// dependent, so the old base is renamed aside and destroyed rather than the
+/// other way round. Between the two renames no base exists; a crash there
+/// costs one cold run, nothing more.
+fn commit_cache(priv_tool: &str, run_id: &str, cache: &CacheClone) -> Result<()> {
+    let CacheClone {
+        base,
+        clone,
+        restored,
+    } = cache;
+    if *restored {
+        zfs(priv_tool, &["promote", clone]).context("zfs promote")?;
+    }
+    let old = format!("{base}.old-{run_id}");
+    let had_base = dataset_exists(priv_tool, base);
+    if had_base {
+        zfs(priv_tool, &["rename", base, &old]).context("zfs rename base aside")?;
+    }
+    zfs(priv_tool, &["rename", clone, base]).context("zfs rename clone to base")?;
+    if had_base {
+        zfs(priv_tool, &["destroy", "-r", &old]).context("zfs destroy old base")?;
+    }
+    let latest = format!("{base}@latest");
+    if *restored {
+        // The previous @latest moved here with the promote.
+        zfs(priv_tool, &["destroy", &latest]).context("zfs destroy previous @latest")?;
+    }
+    zfs(priv_tool, &["snapshot", &latest]).context("zfs snapshot @latest")?;
+    Ok(())
 }
 
 // ---- low-level helpers ----
