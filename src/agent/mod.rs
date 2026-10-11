@@ -298,7 +298,8 @@ async fn do_execute(
             let dail_bin = cfg.dail_bin.clone();
             let priv_tool = cfg.priv_tool.clone();
             let home_dir = cfg.home_dir.clone();
-            // exec: steps run on the host and build nothing — no caches there.
+            // exec: steps run on the host: workspace caches are already mounted
+            // in place by ZFS, absolute ones are jail-only.
             let mounts = if is_host_exec {
                 Vec::new()
             } else {

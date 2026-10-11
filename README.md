@@ -106,8 +106,10 @@ cache:
 ```
 
 - Each cache is a ZFS dataset `<pool>/cache/<repo>/<name>`. A run works in a
-  clone of its `@latest` snapshot, mounted into every `run:` step; `exec:`
-  steps get no caches.
+  clone of its `@latest` snapshot. Relative caches are mounted by ZFS right
+  into the workspace, so both `run:` and `exec:` steps see them; absolute
+  ones apply to `run:` steps only (on the host, the agent's `HOME` persists
+  anyway).
 - The clone becomes the new `@latest` only if the whole run succeeds — a
   failed run never poisons the cache.
 - The name is the key: change the path and the cache is kept, rename it and

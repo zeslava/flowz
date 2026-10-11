@@ -73,6 +73,8 @@ struct CacheClone {
     base: String,
     clone: String,
     restored: bool,
+    /// Mounted inside the workspace via an explicit `mountpoint`.
+    in_workspace: bool,
 }
 
 /// Provision a workspace for `run`. `priv_tool` is the privilege escalation
@@ -107,30 +109,46 @@ impl Workspace {
 
         let mut mounts = Vec::with_capacity(caches.len());
         for (name, path) in caches {
+            let path = pipeline::normalize_cache_path(path);
             // '.' is not allowed in cache names, so these never collide with a base.
             let base = format!("{cache_root}/{name}");
             let clone = format!("{cache_root}/{name}.run-{run_id}");
             let latest = format!("{base}@latest");
 
-            let restored = dataset_exists(priv_tool, &latest);
-            if restored {
-                zfs(priv_tool, &["clone", &latest, &clone])
-                    .with_context(|| format!("cache '{name}': zfs clone"))?;
-            } else {
-                zfs(priv_tool, &["create", &clone])
-                    .with_context(|| format!("cache '{name}': zfs create"))?;
+            // Workspace caches are mounted by ZFS right into the workspace, so
+            // exec: steps on the host see them as plain directories.
+            let in_workspace = !path.starts_with('/');
+            let mut opts: Vec<String> = Vec::new();
+            if in_workspace {
+                opts.push("-o".into());
+                opts.push(format!("mountpoint={}", self.path.join(path).display()));
             }
+
+            let restored = dataset_exists(priv_tool, &latest);
+            let mut args: Vec<&str> = vec![if restored { "clone" } else { "create" }];
+            args.extend(opts.iter().map(String::as_str));
+            if restored {
+                args.push(&latest);
+            }
+            args.push(&clone);
+            zfs(priv_tool, &args).with_context(|| format!("cache '{name}': zfs {}", args[0]))?;
             self.caches.push(CacheClone {
                 base,
                 clone: clone.clone(),
                 restored,
+                in_workspace,
             });
 
             let host_path = mountpoint(priv_tool, &clone)
                 .with_context(|| format!("cache '{name}': resolve mountpoint"))?;
+            if in_workspace {
+                let uid = uid_gid()?;
+                priv_cmd(priv_tool, "chown", &[&uid, &host_path.to_string_lossy()])
+                    .with_context(|| format!("cache '{name}': chown mountpoint"))?;
+            }
             mounts.push(CacheMount {
                 name: name.clone(),
-                path: pipeline::normalize_cache_path(path).to_string(),
+                path: path.to_string(),
                 host_path,
                 restored,
             });
@@ -326,7 +344,12 @@ fn commit_cache(priv_tool: &str, run_id: &str, cache: &CacheClone) -> Result<()>
         base,
         clone,
         restored,
+        in_workspace,
     } = cache;
+    if *in_workspace {
+        // Back to the inherited mountpoint: the workspace is about to go away.
+        zfs(priv_tool, &["inherit", "mountpoint", clone]).context("zfs inherit mountpoint")?;
+    }
     if *restored {
         zfs(priv_tool, &["promote", clone]).context("zfs promote")?;
     }
