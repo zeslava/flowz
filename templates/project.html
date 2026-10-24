@@ -34,6 +34,10 @@
     .chip:hover { border-color: #2563eb; text-decoration: none; }
     .chip.active { background: #2563eb; border-color: #2563eb; color: #fff; }
     .pager { display: flex; justify-content: flex-end; gap: 16px; margin-top: 16px; font-size: 0.9rem; color: #6b7280; }
+    .actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .build-btn { padding: 8px 18px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.85rem; cursor: pointer; }
+    .build-btn:hover { background: #1d4ed8; }
+    .build-btn:disabled { opacity: 0.6; cursor: default; }
     .empty { padding: 40px; text-align: center; color: #9ca3af; }
   </style>
 </head>
@@ -41,8 +45,30 @@
   <div class="crumbs"><a href="/">flowz</a> › {{ repo }}</div>
   <div class="head">
     <h1>{{ repo }}</h1>
-    {% if !web_url.is_empty() %}<a href="{{ web_url }}" target="_blank" rel="noopener">{{ web_url }} ↗</a>{% endif %}
+    <div class="actions">
+      {% if !web_url.is_empty() %}<a href="{{ web_url }}" target="_blank" rel="noopener">{{ web_url }} ↗</a>{% endif %}
+      {% if !clone_url.is_empty() %}
+      <button class="build-btn" data-clone-url="{{ clone_url }}" data-branch="{{ build_branch }}" onclick="build(event, this)">Build {{ build_branch }}</button>
+      {% endif %}
+    </div>
   </div>
+  <script>
+    async function build(e, btn) {
+      btn.disabled = true;
+      const resp = await fetch('/api/runs', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ clone_url: btn.dataset.cloneUrl, branch: btn.dataset.branch })
+      });
+      if (resp.ok) {
+        location.href = '/runs/' + (await resp.json()).run_id;
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Error';
+        btn.title = await resp.text();
+      }
+    }
+  </script>
 
   <div class="filters">
     <a class="chip{% if all_active %} active{% endif %}" href="{{ all_href }}">all</a>

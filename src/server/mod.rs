@@ -114,8 +114,13 @@ impl From<&Run> for RunRow {
 }
 
 struct ProjectRow {
-    last: RunRow,
+    repo: String,
+    href: String,
+    /// `None` for a configured repo that has never been built.
+    last: Option<RunRow>,
     runs: i64,
+    clone_url: String,
+    build_branch: String,
 }
 
 struct BranchLink {
@@ -256,6 +261,8 @@ struct ProjectsTemplate {
 struct ProjectTemplate {
     repo: String,
     web_url: String,
+    clone_url: String,
+    build_branch: String,
     all_href: String,
     all_active: bool,
     branches: Vec<BranchLink>,
@@ -300,15 +307,47 @@ async fn ui_projects(State(state): State<AppState>) -> axum::response::Response 
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
     };
-    render(ProjectsTemplate {
-        projects: projects
-            .iter()
-            .map(|(run, runs)| ProjectRow {
-                last: RunRow::from(run),
+    let mut repos = match state.store.list_repos().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("ui list repos: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+        }
+    };
+
+    // Build uses the registered repo's settings when present, otherwise those
+    // of the latest run.
+    let mut rows: Vec<ProjectRow> = projects
+        .iter()
+        .map(|(run, runs)| {
+            let (clone_url, build_branch) = match repos.iter().position(|r| r.name == run.repo) {
+                Some(i) => {
+                    let r = repos.swap_remove(i);
+                    (r.clone_url, r.branch)
+                }
+                None => (run.clone_url.clone(), run.branch.clone()),
+            };
+            ProjectRow {
+                repo: run.repo.clone(),
+                href: project_href(&run.repo, None, 1),
+                last: Some(RunRow::from(run)),
                 runs: *runs,
-            })
-            .collect(),
-    })
+                clone_url,
+                build_branch,
+            }
+        })
+        .collect();
+    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.extend(repos.into_iter().map(|r| ProjectRow {
+        href: project_href(&r.name, None, 1),
+        repo: r.name,
+        last: None,
+        runs: 0,
+        clone_url: r.clone_url,
+        build_branch: r.branch,
+    }));
+
+    render(ProjectsTemplate { projects: rows })
 }
 
 // ── GET /projects/*repo ───────────────────────────────────────────────────────
@@ -329,13 +368,32 @@ async fn ui_project(
     let branch = q.branch.filter(|b| !b.is_empty());
     let page = q.page.unwrap_or(1).max(1);
 
+    let configured = match state.store.list_repos().await {
+        Ok(r) => r.into_iter().find(|r| r.name == repo),
+        Err(e) => {
+            tracing::error!("ui list repos: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+        }
+    };
     let branches = match state.store.list_project_branches(&repo).await {
-        Ok(b) if b.is_empty() => return (StatusCode::NOT_FOUND, "not found").into_response(),
+        Ok(b) if b.is_empty() && configured.is_none() => {
+            return (StatusCode::NOT_FOUND, "not found").into_response()
+        }
         Ok(b) => b,
         Err(e) => {
             tracing::error!("ui list project branches: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
+    };
+    let (clone_url, default_branch) = match configured {
+        Some(r) => (r.clone_url, r.branch),
+        None => match state.store.list_project_runs(&repo, None, 1, 0).await {
+            Ok(mut r) => r.pop().map(|r| (r.clone_url, r.branch)).unwrap_or_default(),
+            Err(e) => {
+                tracing::error!("ui latest project run: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+            }
+        },
     };
     // Fetch one extra row to know whether a next page exists.
     let mut runs = match state
@@ -358,10 +416,9 @@ async fn ui_project(
     runs.truncate(PROJECT_PAGE_SIZE as usize);
 
     render(ProjectTemplate {
-        web_url: runs
-            .first()
-            .and_then(|r| web_url(&r.clone_url))
-            .unwrap_or_default(),
+        web_url: web_url(&clone_url).unwrap_or_default(),
+        build_branch: branch.clone().unwrap_or(default_branch),
+        clone_url,
         all_href: project_href(&repo, None, 1),
         all_active: branch.is_none(),
         branches: branches

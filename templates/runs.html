@@ -44,7 +44,7 @@
     .repo-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 0.88rem; border-bottom: 1px solid #f3f4f6; }
     .repo-row:last-child { border-bottom: none; margin-bottom: 12px; }
     .repo-name { flex: 1; font-weight: 600; }
-    .build-btn { padding: 3px 12px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.82rem; cursor: pointer; }
+    .build-btn { padding: 8px 18px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.82rem; cursor: pointer; }
     .build-btn:hover { background: #1d4ed8; }
     .del-btn { padding: 3px 8px; background: none; border: 1px solid #e5e7eb; border-radius: 4px; color: #9ca3af; cursor: pointer; font-size: 0.78rem; }
     .del-btn:hover { border-color: #dc2626; color: #dc2626; }
@@ -83,26 +83,24 @@
         <div class="repo-row" data-id="${r.id}">
           <span class="repo-name">${r.name}</span>
           <code>${r.branch}</code>
-          <button class="build-btn" onclick="triggerRun('${r.id}','${r.clone_url}','${r.branch}')">Build</button>
           <button class="del-btn" onclick="deleteRepo('${r.id}')">✕</button>
         </div>`).join('');
     }
 
-    async function triggerRun(id, clone_url, branch) {
-      const msg = document.getElementById('repo-msg');
+    async function build(e, btn) {
+      e.stopPropagation();
+      btn.disabled = true;
       const resp = await fetch('/api/runs', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ clone_url, branch })
+        body: JSON.stringify({ clone_url: btn.dataset.cloneUrl, branch: btn.dataset.branch })
       });
       if (resp.ok) {
-        const data = await resp.json();
-        msg.className = 'ok';
-        msg.textContent = 'Queued: ' + data.run_id;
-        setTimeout(() => location.reload(), 800);
+        location.href = '/runs/' + (await resp.json()).run_id;
       } else {
-        msg.className = 'err';
-        msg.textContent = 'Error: ' + await resp.text();
+        btn.disabled = false;
+        btn.textContent = 'Error';
+        btn.title = await resp.text();
       }
     }
 
@@ -148,17 +146,27 @@
         <th>Commit</th>
         <th>Last run</th>
         <th class="num">Runs</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
       {% for p in projects %}
-      <tr class="link" onclick="location.href='{{ p.last.project_href }}'">
-        <td class="st s-{{ p.last.status }}">{{ p.last.status }}</td>
-        <td><a class="project" href="{{ p.last.project_href }}">{{ p.last.repo }}</a></td>
-        <td>{{ p.last.branch }}</td>
-        <td><code>{{ p.last.commit_short }}</code></td>
-        <td class="muted" title="{{ p.last.created_at }}">{{ p.last.ago }}</td>
+      <tr class="link" onclick="location.href='{{ p.href }}'">
+        {% if let Some(l) = p.last %}
+        <td class="st s-{{ l.status }}">{{ l.status }}</td>
+        <td><a class="project" href="{{ p.href }}">{{ p.repo }}</a></td>
+        <td>{{ l.branch }}</td>
+        <td><code>{{ l.commit_short }}</code></td>
+        <td class="muted" title="{{ l.created_at }}">{{ l.ago }}</td>
+        {% else %}
+        <td class="muted">never built</td>
+        <td><a class="project" href="{{ p.href }}">{{ p.repo }}</a></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        {% endif %}
         <td class="num muted">{{ p.runs }}</td>
+        <td class="num"><button class="build-btn" data-clone-url="{{ p.clone_url }}" data-branch="{{ p.build_branch }}" title="Build {{ p.build_branch }}" onclick="build(event, this)">Build</button></td>
       </tr>
       {% endfor %}
     </tbody>
