@@ -41,7 +41,7 @@
   </style>
 </head>
 <body>
-  <p><a href="/">← all runs</a></p>
+  <p><a href="/">flowz</a> › <a href="{{ run.project_href }}">{{ run.repo }}</a> › run {{ run.id_short }}</p>
   <h1>Run <code>{{ run.id_short }}</code> — <span class="s-{{ run.status }}">{{ run.status }}</span></h1>
   <div class="meta">
     {{ run.repo }} · {{ run.branch }} · <code>{{ run.commit_short }}</code> · {{ run.created_at }}{% if !run.duration.is_empty() %} · took {{ run.duration }}{% endif %}

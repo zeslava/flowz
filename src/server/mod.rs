@@ -53,7 +53,8 @@ pub fn router(state: AppState) -> Router {
 
     // Protected routes: UI pages + read API. Gated only when OIDC is configured.
     let mut protected = Router::new()
-        .route("/", get(ui_runs))
+        .route("/", get(ui_projects))
+        .route("/projects/{*repo}", get(ui_project))
         .route("/runs/{id}", get(ui_run))
         .route("/api/runs/{id}/artifacts", get(list_artifacts_api))
         .route("/api/runs/{id}/artifacts/{*path}", get(download_artifact))
@@ -84,7 +85,9 @@ struct RunRow {
     commit_short: String,
     status: String,
     created_at: String,
+    ago: String,
     duration: String,
+    project_href: String,
 }
 
 impl From<&Run> for RunRow {
@@ -103,8 +106,47 @@ impl From<&Run> for RunRow {
             commit_short: r.commit[..7.min(r.commit.len())].to_string(),
             status: run_status_str(&r.status).to_string(),
             created_at: r.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            ago: human_ago(Utc::now() - r.created_at),
             duration,
+            project_href: project_href(&r.repo, None, 1),
         }
+    }
+}
+
+struct ProjectRow {
+    last: RunRow,
+    runs: i64,
+}
+
+struct BranchLink {
+    name: String,
+    href: String,
+    active: bool,
+}
+
+fn project_href(repo: &str, branch: Option<&str>, page: i64) -> String {
+    let mut params = Vec::new();
+    if let Some(b) = branch {
+        params.push(format!("branch={}", urlencoding::encode(b)));
+    }
+    if page > 1 {
+        params.push(format!("page={page}"));
+    }
+    if params.is_empty() {
+        format!("/projects/{repo}")
+    } else {
+        format!("/projects/{repo}?{}", params.join("&"))
+    }
+}
+
+/// https://host/owner/repo(.git) or git@host:owner/repo(.git) → https://host/owner/repo
+fn web_url(clone_url: &str) -> Option<String> {
+    let url = clone_url.trim_end_matches(".git");
+    if url.starts_with("https://") {
+        Some(url.to_string())
+    } else {
+        let (host, path) = url.strip_prefix("git@")?.split_once(':')?;
+        Some(format!("https://{host}/{path}"))
     }
 }
 
@@ -171,6 +213,16 @@ fn human_duration(d: chrono::Duration) -> String {
     }
 }
 
+fn human_ago(d: chrono::Duration) -> String {
+    let secs = d.num_seconds().max(0);
+    match secs {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{} min ago", secs / 60),
+        3600..86400 => format!("{} h ago", secs / 3600),
+        _ => format!("{} d ago", secs / 86400),
+    }
+}
+
 fn run_status_str(s: &RunStatus) -> &'static str {
     match s {
         RunStatus::Queued => "queued",
@@ -195,8 +247,22 @@ fn step_status_str(s: &StepStatus) -> &'static str {
 
 #[derive(Template)]
 #[template(path = "runs.html")]
-struct RunsTemplate {
+struct ProjectsTemplate {
+    projects: Vec<ProjectRow>,
+}
+
+#[derive(Template)]
+#[template(path = "project.html")]
+struct ProjectTemplate {
+    repo: String,
+    web_url: String,
+    all_href: String,
+    all_active: bool,
+    branches: Vec<BranchLink>,
     runs: Vec<RunRow>,
+    page: i64,
+    prev_href: String,
+    next_href: String,
 }
 
 #[derive(Template)]
@@ -226,16 +292,99 @@ async fn favicon() -> impl IntoResponse {
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 
-async fn ui_runs(State(state): State<AppState>) -> axum::response::Response {
-    let runs = match state.store.list_runs(50).await {
-        Ok(r) => r,
+async fn ui_projects(State(state): State<AppState>) -> axum::response::Response {
+    let projects = match state.store.list_projects().await {
+        Ok(p) => p,
         Err(e) => {
-            tracing::error!("ui list runs: {e}");
+            tracing::error!("ui list projects: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
     };
-    render(RunsTemplate {
+    render(ProjectsTemplate {
+        projects: projects
+            .iter()
+            .map(|(run, runs)| ProjectRow {
+                last: RunRow::from(run),
+                runs: *runs,
+            })
+            .collect(),
+    })
+}
+
+// ── GET /projects/*repo ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ProjectQuery {
+    branch: Option<String>,
+    page: Option<i64>,
+}
+
+const PROJECT_PAGE_SIZE: i64 = 50;
+
+async fn ui_project(
+    State(state): State<AppState>,
+    Path(repo): Path<String>,
+    Query(q): Query<ProjectQuery>,
+) -> axum::response::Response {
+    let branch = q.branch.filter(|b| !b.is_empty());
+    let page = q.page.unwrap_or(1).max(1);
+
+    let branches = match state.store.list_project_branches(&repo).await {
+        Ok(b) if b.is_empty() => return (StatusCode::NOT_FOUND, "not found").into_response(),
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("ui list project branches: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+        }
+    };
+    // Fetch one extra row to know whether a next page exists.
+    let mut runs = match state
+        .store
+        .list_project_runs(
+            &repo,
+            branch.as_deref(),
+            PROJECT_PAGE_SIZE + 1,
+            (page - 1) * PROJECT_PAGE_SIZE,
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("ui list project runs: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+        }
+    };
+    let has_next = runs.len() as i64 > PROJECT_PAGE_SIZE;
+    runs.truncate(PROJECT_PAGE_SIZE as usize);
+
+    render(ProjectTemplate {
+        web_url: runs
+            .first()
+            .and_then(|r| web_url(&r.clone_url))
+            .unwrap_or_default(),
+        all_href: project_href(&repo, None, 1),
+        all_active: branch.is_none(),
+        branches: branches
+            .into_iter()
+            .map(|b| BranchLink {
+                href: project_href(&repo, Some(&b), 1),
+                active: branch.as_deref() == Some(b.as_str()),
+                name: b,
+            })
+            .collect(),
         runs: runs.iter().map(RunRow::from).collect(),
+        page,
+        prev_href: if page > 1 {
+            project_href(&repo, branch.as_deref(), page - 1)
+        } else {
+            String::new()
+        },
+        next_href: if has_next {
+            project_href(&repo, branch.as_deref(), page + 1)
+        } else {
+            String::new()
+        },
+        repo,
     })
 }
 

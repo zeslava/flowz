@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>flowz / {{ repo }}</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <style>
+    body { font-family: monospace; max-width: 1100px; margin: 40px auto; padding: 0 20px; background: #fafafa; color: #111; }
+    .crumbs { font-size: 0.9rem; color: #6b7280; margin-bottom: 16px; }
+    .head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: 1.4rem; }
+    table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+    th { text-align: left; padding: 10px 18px; background: #f3f4f6; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 18px; border-bottom: 1px solid #f3f4f6; font-size: 0.95rem; }
+    tr:last-child td { border-bottom: none; }
+    tr.link { cursor: pointer; }
+    tr.link:hover td { background: #f5f8ff; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+    .muted { color: #6b7280; }
+    .s-success { color: #16a34a; font-weight: bold; }
+    .s-failure { color: #dc2626; font-weight: bold; }
+    .s-running { color: #d97706; font-weight: bold; }
+    .s-queued  { color: #6b7280; }
+    .s-cancelled { color: #9ca3af; }
+    .st.s-success::before { content: '● '; }
+    .st.s-failure::before { content: '✗ '; }
+    .st.s-running::before { content: '◌ '; }
+    .st.s-queued::before { content: '○ '; }
+    .st.s-cancelled::before { content: '⊘ '; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .chip { padding: 6px 14px; border: 1px solid #e5e7eb; border-radius: 999px; background: #fff; color: #374151; font-size: 0.85rem; }
+    .chip:hover { border-color: #2563eb; text-decoration: none; }
+    .chip.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .pager { display: flex; justify-content: flex-end; gap: 16px; margin-top: 16px; font-size: 0.9rem; color: #6b7280; }
+    .empty { padding: 40px; text-align: center; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="crumbs"><a href="/">flowz</a> › {{ repo }}</div>
+  <div class="head">
+    <h1>{{ repo }}</h1>
+    {% if !web_url.is_empty() %}<a href="{{ web_url }}" target="_blank" rel="noopener">{{ web_url }} ↗</a>{% endif %}
+  </div>
+
+  <div class="filters">
+    <a class="chip{% if all_active %} active{% endif %}" href="{{ all_href }}">all</a>
+    {% for b in branches %}
+    <a class="chip{% if b.active %} active{% endif %}" href="{{ b.href }}">{{ b.name }}</a>
+    {% endfor %}
+  </div>
+
+  {% if runs.is_empty() %}
+  <div class="empty">No runs.</div>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>ID</th>
+        <th>Branch</th>
+        <th>Commit</th>
+        <th>Started</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr class="link" onclick="location.href='/runs/{{ r.id }}'">
+        <td class="st s-{{ r.status }}">{{ r.status }}</td>
+        <td><a href="/runs/{{ r.id }}">{{ r.id_short }}</a></td>
+        <td>{{ r.branch }}</td>
+        <td><code>{{ r.commit_short }}</code></td>
+        <td class="muted" title="{{ r.created_at }}">{{ r.ago }}</td>
+        <td class="muted">{{ r.duration }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if !prev_href.is_empty() || !next_href.is_empty() %}
+  <div class="pager">
+    {% if !prev_href.is_empty() %}<a href="{{ prev_href }}">‹ prev</a>{% endif %}
+    <span>page {{ page }}</span>
+    {% if !next_href.is_empty() %}<a href="{{ next_href }}">next ›</a>{% endif %}
+  </div>
+  {% endif %}
+</body>
+</html>

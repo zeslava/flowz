@@ -81,6 +81,59 @@ impl Store {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    /// One entry per repo seen in runs: its latest run and total run count,
+    /// most recently active first.
+    pub async fn list_projects(&self) -> Result<Vec<(Run, i64)>> {
+        let rows = sqlx::query_as::<_, ProjectRow>(
+            "SELECT id, repo, branch, \"commit\", clone_url, status, created_at, updated_at, cnt
+             FROM (
+                 SELECT *,
+                        ROW_NUMBER() OVER (PARTITION BY repo ORDER BY created_at DESC) AS rn,
+                        COUNT(*) OVER (PARTITION BY repo) AS cnt
+                 FROM runs
+             )
+             WHERE rn = 1 ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list projects")?;
+        Ok(rows.into_iter().map(|r| (r.run.into(), r.cnt)).collect())
+    }
+
+    /// Branches of a repo, most recently built first.
+    pub async fn list_project_branches(&self, repo: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT branch FROM runs WHERE repo = ? GROUP BY branch ORDER BY MAX(created_at) DESC",
+        )
+        .bind(repo)
+        .fetch_all(&self.pool)
+        .await
+        .context("list project branches")?;
+        Ok(rows.into_iter().map(|(b,)| b).collect())
+    }
+
+    pub async fn list_project_runs(
+        &self,
+        repo: &str,
+        branch: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Run>> {
+        let rows = sqlx::query_as::<_, RunRow>(
+            "SELECT id, repo, branch, \"commit\", clone_url, status, created_at, updated_at
+             FROM runs WHERE repo = ?1 AND (?2 IS NULL OR branch = ?2)
+             ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
+        )
+        .bind(repo)
+        .bind(branch)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .context("list project runs")?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     pub async fn list_steps(&self, run_id: &str) -> Result<Vec<StepRecord>> {
         let rows = sqlx::query_as::<_, StepRow>(
             "SELECT run_id, name, status, started_at, finished_at FROM steps WHERE run_id = ?",
@@ -358,6 +411,13 @@ impl From<RunRow> for Run {
             updated_at: r.updated_at.parse().unwrap_or_default(),
         }
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ProjectRow {
+    #[sqlx(flatten)]
+    run: RunRow,
+    cnt: i64,
 }
 
 #[derive(sqlx::FromRow)]
