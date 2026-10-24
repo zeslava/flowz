@@ -41,13 +41,8 @@
     #trigger-msg { font-size: 0.82rem; margin-top: 8px; }
     #trigger-msg.ok { color: #16a34a; }
     #trigger-msg.err { color: #dc2626; }
-    .repo-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 0.88rem; border-bottom: 1px solid #f3f4f6; }
-    .repo-row:last-child { border-bottom: none; margin-bottom: 12px; }
-    .repo-name { flex: 1; font-weight: 600; }
     .build-btn { padding: 8px 18px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.82rem; cursor: pointer; }
     .build-btn:hover { background: #1d4ed8; }
-    .del-btn { padding: 3px 8px; background: none; border: 1px solid #e5e7eb; border-radius: 4px; color: #9ca3af; cursor: pointer; font-size: 0.78rem; }
-    .del-btn:hover { border-color: #dc2626; color: #dc2626; }
     #repo-msg { font-size: 0.82rem; margin-top: 6px; }
     #repo-msg.ok { color: #16a34a; }
     #repo-msg.err { color: #dc2626; }
@@ -57,8 +52,7 @@
   <h1>flowz / projects</h1>
 
   <div class="trigger">
-    <h2>Repos</h2>
-    <div id="repos-list"></div>
+    <h2>Add project</h2>
     <form id="add-repo-form">
       <label>Clone URL
         <input type="text" name="clone_url" placeholder="https://github.com/owner/repo.git" required>
@@ -66,27 +60,11 @@
       <label>Branch
         <input type="text" name="branch" class="short" placeholder="main">
       </label>
-      <button type="submit">Add repo</button>
+      <button type="submit">Add</button>
     </form>
     <div id="repo-msg"></div>
   </div>
   <script>
-    async function loadRepos() {
-      const resp = await fetch('/api/repos');
-      const repos = await resp.json();
-      const list = document.getElementById('repos-list');
-      if (!repos.length) {
-        list.innerHTML = '<div style="color:#9ca3af;font-size:0.85rem;margin-bottom:10px">No repos yet.</div>';
-        return;
-      }
-      list.innerHTML = repos.map(r => `
-        <div class="repo-row" data-id="${r.id}">
-          <span class="repo-name">${r.name}</span>
-          <code>${r.branch}</code>
-          <button class="del-btn" onclick="deleteRepo('${r.id}')">✕</button>
-        </div>`).join('');
-    }
-
     async function build(e, btn) {
       e.stopPropagation();
       btn.disabled = true;
@@ -104,11 +82,6 @@
       }
     }
 
-    async function deleteRepo(id) {
-      await fetch('/api/repos/' + id, { method: 'DELETE' });
-      loadRepos();
-    }
-
     document.getElementById('add-repo-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -122,17 +95,12 @@
         body: JSON.stringify(body)
       });
       if (resp.ok) {
-        e.target.reset();
-        msg.className = '';
-        msg.textContent = '';
-        loadRepos();
+        location.reload();
       } else {
         msg.className = 'err';
         msg.textContent = 'Error: ' + await resp.text();
       }
     });
-
-    loadRepos();
   </script>
   {% if projects.is_empty() %}
   <div class="empty">No runs yet. Push to a configured repo to trigger a run.</div>

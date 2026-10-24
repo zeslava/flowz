@@ -38,6 +38,8 @@
     .build-btn { padding: 8px 18px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-family: monospace; font-size: 0.85rem; cursor: pointer; }
     .build-btn:hover { background: #1d4ed8; }
     .build-btn:disabled { opacity: 0.6; cursor: default; }
+    .del-btn { padding: 8px 14px; background: none; border: 1px solid #e5e7eb; border-radius: 4px; color: #9ca3af; font-family: monospace; font-size: 0.85rem; cursor: pointer; }
+    .del-btn:hover, .del-btn.armed { border-color: #dc2626; color: #dc2626; }
     .empty { padding: 40px; text-align: center; color: #9ca3af; }
   </style>
 </head>
@@ -49,6 +51,9 @@
       {% if !web_url.is_empty() %}<a href="{{ web_url }}" target="_blank" rel="noopener">{{ web_url }} ↗</a>{% endif %}
       {% if !clone_url.is_empty() %}
       <button class="build-btn" data-clone-url="{{ clone_url }}" data-branch="{{ build_branch }}" onclick="build(event, this)">Build {{ build_branch }}</button>
+      {% endif %}
+      {% if !repo_id.is_empty() %}
+      <button class="del-btn" data-id="{{ repo_id }}" onclick="removeProject(this)">Remove</button>
       {% endif %}
     </div>
   </div>
@@ -66,6 +71,24 @@
         btn.disabled = false;
         btn.textContent = 'Error';
         btn.title = await resp.text();
+      }
+    }
+
+    // Two-click confirmation: the first click arms the button for 3 seconds.
+    async function removeProject(btn) {
+      if (!btn.classList.contains('armed')) {
+        btn.classList.add('armed');
+        btn.textContent = 'Click again to remove';
+        setTimeout(() => { btn.classList.remove('armed'); btn.textContent = 'Remove'; }, 3000);
+        return;
+      }
+      btn.disabled = true;
+      const resp = await fetch('/api/repos/' + btn.dataset.id, { method: 'DELETE' });
+      if (resp.ok) {
+        location.href = '/';
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Error';
       }
     }
   </script>

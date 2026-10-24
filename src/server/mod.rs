@@ -263,6 +263,8 @@ struct ProjectTemplate {
     web_url: String,
     clone_url: String,
     build_branch: String,
+    /// Id in `repos`; empty when the project is known only from its runs.
+    repo_id: String,
     all_href: String,
     all_active: bool,
     branches: Vec<BranchLink>,
@@ -385,6 +387,10 @@ async fn ui_project(
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
     };
+    let repo_id = configured
+        .as_ref()
+        .map(|r| r.id.clone())
+        .unwrap_or_default();
     let (clone_url, default_branch) = match configured {
         Some(r) => (r.clone_url, r.branch),
         None => match state.store.list_project_runs(&repo, None, 1, 0).await {
@@ -419,6 +425,7 @@ async fn ui_project(
         web_url: web_url(&clone_url).unwrap_or_default(),
         build_branch: branch.clone().unwrap_or(default_branch),
         clone_url,
+        repo_id,
         all_href: project_href(&repo, None, 1),
         all_active: branch.is_none(),
         branches: branches
